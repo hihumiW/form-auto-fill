@@ -51,10 +51,9 @@ function isApplicationBookReady(): boolean {
     ".pdf-preview .vue-pdf-embed__page"
   );
 
-  // 申请书现在由 vue-pdf-embed 渲染为 canvas，不能依赖正文文字判断。
+  // 判断申请书 和 申请书的pdf是否出现
   return (
     processContentText.includes("申请书") &&
-    processContentText.includes("1/1") &&
     (isVisibleElement(visiblePdfCanvas) || isVisibleElement(visiblePdfPage))
   );
 }

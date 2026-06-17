@@ -51,7 +51,7 @@ export function isVisibleElement(element?: Element | null): element is HTMLEleme
 export async function waitUntil(
   description: string,
   predicate: () => boolean | Promise<boolean>,
-  timeout: number = 15000,
+  timeout: number = 20000,
   interval: number = 200
 ): Promise<void> {
   const startTime = Date.now();

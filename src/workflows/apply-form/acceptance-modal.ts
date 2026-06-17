@@ -68,6 +68,6 @@ export async function saveAcceptanceModal(): Promise<void> {
     return pageText.includes("已受理") || pageText.includes("保存成功");
   });
 
-  // 政务系统保存后立刻进入下一步容易出现 504，这里固定冷却 3 秒。
-  await wait(3000);
+  // 政务系统保存后立刻进入下一步容易出现 504，这里固定冷却一下。
+  await wait(APPLY_FORM_CONFIG.saveSleepTime);
 }

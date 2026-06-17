@@ -1,4 +1,3 @@
-import { useState } from "react";
 import reactLogo from "@/assets/react.svg";
 import wxtLogo from "/wxt.svg";
 import "./App.css";
@@ -21,8 +20,6 @@ const triggerAutoFill = async (type: TriggerType) => {
 };
 
 function App() {
-  const [count, setCount] = useState(0);
-
   const handleFormFill = (type: TriggerType) => {
     triggerAutoFill(type);
   };
@@ -42,8 +39,8 @@ function App() {
         <button onClick={() => handleFormFill("applyForm")}>
           自动处理当事人申请
         </button>
-        <button onClick={() => handleFormFill("ktForm")}>
-          自动处理口头案件申请
+        <button onClick={() => handleFormFill("oralCase")}>
+          自动处理口头案件办理
         </button>
       </div>
       <p className="read-the-docs">要停止，直接刷新页面即可</p>

@@ -2,4 +2,5 @@
 export const APPLY_FORM_CONFIG = {
   disputeType: "其他纠纷",
   mediator: "曾傅铭",
+  saveSleepTime: 3500,
 };

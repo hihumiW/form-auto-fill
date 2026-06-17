@@ -102,6 +102,44 @@ export async function selectRadio(
   await wait(400);
 }
 
+// Fill a visible Ant Design form field by its label and notify the page framework.
+export async function fillInputByLabel(
+  labelText: string,
+  value: string | number,
+  options: {
+    scope?: QueryScope;
+    selector?: string;
+  } = {}
+): Promise<void> {
+  const $formItem = findFormItem(labelText, options.scope);
+  const input = $formItem.find<HTMLElement>(
+    options.selector || "textarea, input:not([type='hidden'])"
+  )[0];
+
+  if (!input) {
+    throw new Error(`没有找到表单项输入框：${labelText}`);
+  }
+
+  scrollElementToCenter(input);
+  await wait(150);
+
+  const valueText = String(value);
+  const prototype =
+    input instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const valueSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+
+  if (valueSetter) {
+    valueSetter.call(input, valueText);
+  } else {
+    $(input).val(valueText);
+  }
+
+  dispatchInputEvents(input);
+  await wait(200);
+}
+
 // 查找当前打开且可见的 Ant Design 下拉弹层。
 function findVisibleDropdown(): JQuery<HTMLElement> {
   const dropdown = Array.from(

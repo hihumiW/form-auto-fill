@@ -17,6 +17,7 @@
   "dependencies": {
     "@types/jquery": "^3.5.33",
     "jquery": "^3.7.1",
+    "jsqr": "^1.4.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

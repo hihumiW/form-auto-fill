@@ -7,7 +7,7 @@ export default defineConfig({
     name: "form-futo-fill",
     description: "自动填写",
     version: "0.0.1",
-    permissions: ["activeTab", "scripting"],
+    permissions: ["activeTab", "tabs", "debugger", "scripting"],
     host_permissions: ["http://*:*/*", "https://*:*/*"],
     web_accessible_resources: [
       {
