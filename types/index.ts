@@ -1,5 +1,6 @@
 export type TriggerType = "applyForm"  | "oralCase";
 export type BackgroundAction = "openMobileSignPage";
+export type SignatureMode = "manual" | "auto";
 
 export interface ResponseResult<T = null> {
   success: boolean;
@@ -14,4 +15,5 @@ export interface RequestAction<T = null> {
 
 export interface OpenMobileSignPagePayload {
   url: string;
+  signatureMode?: SignatureMode;
 }

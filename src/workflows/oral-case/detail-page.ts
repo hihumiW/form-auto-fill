@@ -375,7 +375,7 @@ async function decodeQrUrl(modal: HTMLElement): Promise<string> {
 async function openMobileSignPage(url: string): Promise<void> {
   const response = (await browser.runtime.sendMessage({
     action: "openMobileSignPage",
-    data: { url },
+    data: { url, signatureMode: ORAL_CASE_CONFIG.signatureMode },
   } satisfies RequestAction<OpenMobileSignPagePayload>)) as ResponseResult;
 
   if (!response?.success) {
@@ -434,6 +434,8 @@ export async function runSignatureFlow(): Promise<void> {
 
     if (modalText.includes("生成二维码") || modalText.includes("二维码")) {
       const qrUrl = await decodeQrUrl(modal);
+      // console.log(qrUrl, 'qrUrl');
+      // throw Error('test');
       await openMobileSignPage(qrUrl);
       await closeQrCodeModal(modal);
       await waitForSealButtonReady();

@@ -1,7 +1,8 @@
-import {
+import type {
   OpenMobileSignPagePayload,
   RequestAction,
   ResponseResult,
+  SignatureMode,
 } from "@/types";
 
 const MOBILE_USER_AGENT =
@@ -122,10 +123,14 @@ async function setupMobileEnvironment(debuggee: Debuggee): Promise<void> {
   });
 }
 
-async function executeMobileSignScript(tabId: number): Promise<void> {
+async function executeMobileSignScript(
+  tabId: number,
+  signatureMode: SignatureMode
+): Promise<void> {
   const results = await browser.scripting.executeScript({
     target: { tabId, allFrames: true },
     func: mobileSignAutomation,
+    args: [signatureMode],
   });
 
   const values = results.map((result) => result?.result) as Array<
@@ -169,7 +174,7 @@ async function openMobileSignPage(
     await setupMobileEnvironment(debuggee);
     await browser.tabs.update(tab.id, { url: payload.url });
     await waitForTabComplete(tab.id);
-    await executeMobileSignScript(tab.id);
+    await executeMobileSignScript(tab.id, payload.signatureMode || "auto");
     await browser.tabs.remove(tab.id);
     return { success: true, data: null };
   } finally {
@@ -205,12 +210,15 @@ export default defineBackground(() => {
   );
 });
 
-function mobileSignAutomation(): Promise<
+function mobileSignAutomation(
+  signatureMode: "manual" | "auto" = "auto"
+): Promise<
   MobileSignScriptResult
 > {
   type Point = [number, number];
   type Stroke = Point[];
   type StrokeEventType = "start" | "move" | "end";
+  type EventWindow = Window & typeof globalThis;
 
   const SELECTORS = {
     positionButton: ".ax-pdf-overlay-position-btn",
@@ -223,14 +231,19 @@ function mobileSignAutomation(): Promise<
     clickable: "button, .van-button, [role='button'], a, div, span",
   };
   const TEXT = {
-    signatureEntry: ["签字", "签名"],
-    signatureConfirm: ["确认", "确定", "保存", "完成"],
-    submit: ["提交签署", "提交签字", "提交"],
+    signatureEntry: ["\u7b7e\u5b57", "\u7b7e\u540d"],
+    signatureConfirm: ["\u786e\u8ba4", "\u786e\u5b9a", "\u4fdd\u5b58", "\u5b8c\u6210"],
+    submit: ["\u63d0\u4ea4\u7b7e\u7f72", "\u63d0\u4ea4\u7b7e\u5b57", "\u63d0\u4ea4"],
   };
   const SIGN_LIMITS = {
     maxSignaturePositions: 12,
     focusTimeout: 3000,
     countDecreaseTimeout: 8000,
+    pageReadyTimeout: 30000,
+    manualSignatureTimeout: 10 * 60 * 1000,
+    manualSuccessTimeout: 10 * 60 * 1000,
+    submitButtonTimeout: 15000,
+    submitSettleDelay: 5000,
     initialDelay: 1500,
   };
   const STROKE_LIMITS = {
@@ -245,11 +258,42 @@ function mobileSignAutomation(): Promise<
 
   const normalizeText = (text?: string | null) => (text || "").replace(/\s+/g, "");
 
+  const getSearchDocuments = (): Document[] => {
+    const documents: Document[] = [document];
+    const visited = new Set<Document>(documents);
+
+    for (const currentDocument of documents) {
+      const frames = Array.from(currentDocument.querySelectorAll("iframe"));
+
+      for (const frame of frames) {
+        try {
+          const frameDocument = frame.contentDocument;
+          if (frameDocument && !visited.has(frameDocument)) {
+            visited.add(frameDocument);
+            documents.push(frameDocument);
+          }
+        } catch {
+          // Cross-origin frames cannot be inspected from the top document.
+        }
+      }
+    }
+
+    return documents;
+  };
+
+  const queryAll = <T extends Element>(selector: string): T[] =>
+    getSearchDocuments().flatMap((currentDocument) =>
+      Array.from(currentDocument.querySelectorAll<T>(selector))
+    );
+
+  const getElementWindow = (element: Element): EventWindow =>
+    (element.ownerDocument.defaultView || window) as EventWindow;
+
   const isVisible = (element?: Element | null): element is HTMLElement => {
     if (!element) return false;
     const htmlElement = element as HTMLElement;
     const rect = htmlElement.getBoundingClientRect();
-    const style = window.getComputedStyle(htmlElement);
+    const style = getElementWindow(htmlElement).getComputedStyle(htmlElement);
     return (
       style.display !== "none" &&
       style.visibility !== "hidden" &&
@@ -268,9 +312,7 @@ function mobileSignAutomation(): Promise<
   ): HTMLElement | undefined => {
     const normalizedTexts = texts.map(normalizeText);
     const excludes = (options.exclude || []).map(normalizeText);
-    const candidates = Array.from(
-      document.querySelectorAll<HTMLElement>(SELECTORS.clickable)
-    ).filter(isVisible);
+    const candidates = queryAll<HTMLElement>(SELECTORS.clickable).filter(isVisible);
 
     return candidates
       .filter((candidate) => {
@@ -302,15 +344,13 @@ function mobileSignAutomation(): Promise<
   };
 
   const findSignatureImageEntry = (): HTMLElement | undefined => {
-    const focused = document.querySelector<HTMLElement>(SELECTORS.focusedSignature);
+    const focused = queryAll<HTMLElement>(SELECTORS.focusedSignature)[0];
 
     if (isVisible(focused)) {
       return focused;
     }
 
-    const candidates = Array.from(
-      document.querySelectorAll<HTMLElement>(SELECTORS.signatureEntry)
-    )
+    const candidates = queryAll<HTMLElement>(SELECTORS.signatureEntry)
       .filter(isVisible)
       .filter((element) => {
         const text = getElementText(element);
@@ -334,7 +374,7 @@ function mobileSignAutomation(): Promise<
   };
 
   const findPositionButton = (): HTMLElement | undefined => {
-    const button = document.querySelector<HTMLElement>(SELECTORS.positionButton);
+    const button = queryAll<HTMLElement>(SELECTORS.positionButton)[0];
     return isVisible(button) ? button : undefined;
   };
 
@@ -393,9 +433,10 @@ function mobileSignAutomation(): Promise<
     const rect = element.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
+    const elementWindow = getElementWindow(element);
     for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
       element.dispatchEvent(
-        new MouseEvent(type, {
+        new elementWindow.MouseEvent(type, {
           bubbles: true,
           cancelable: true,
           clientX: x,
@@ -407,11 +448,7 @@ function mobileSignAutomation(): Promise<
   };
 
   const topSignTarget = (): HTMLElement => {
-    const dialog = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        SELECTORS.signatureContainer
-      )
-    )
+    const dialog = queryAll<HTMLElement>(SELECTORS.signatureContainer)
       .filter(isVisible)
       .sort((left, right) => {
         const leftRect = left.getBoundingClientRect();
@@ -419,7 +456,7 @@ function mobileSignAutomation(): Promise<
         return rightRect.width * rightRect.height - leftRect.width * leftRect.height;
       })[0];
 
-    return dialog || document.body;
+    return dialog || findPositionButton()?.ownerDocument.body || document.body;
   };
 
   const randomBetween = (min: number, max: number): number =>
@@ -472,14 +509,16 @@ function mobileSignAutomation(): Promise<
     pointerId: number,
     force: number
   ): void => {
-    const eventTarget = document.elementFromPoint(x, y) || target;
+    const targetDocument = target.ownerDocument;
+    const targetWindow = (targetDocument.defaultView || window) as EventWindow;
+    const eventTarget = targetDocument.elementFromPoint(x, y) || target;
     const pointerType =
       type === "start" ? "pointerdown" : type === "move" ? "pointermove" : "pointerup";
     const mouseType =
       type === "start" ? "mousedown" : type === "move" ? "mousemove" : "mouseup";
 
     eventTarget.dispatchEvent(
-      new PointerEvent(pointerType, {
+      new targetWindow.PointerEvent(pointerType, {
         bubbles: true,
         cancelable: true,
         clientX: x,
@@ -509,7 +548,7 @@ function mobileSignAutomation(): Promise<
     }
 
     eventTarget.dispatchEvent(
-      new MouseEvent(mouseType, {
+      new targetWindow.MouseEvent(mouseType, {
         bubbles: true,
         cancelable: true,
         clientX: x,
@@ -650,19 +689,114 @@ function mobileSignAutomation(): Promise<
   };
 
   const submitSignedDocuments = async (): Promise<boolean> => {
-    const submit = findClickableByText(TEXT.submit);
+    let submit = findClickableByText(TEXT.submit);
+
+    if (!submit) {
+      await waitUntil(
+        "submit signature button",
+        () => Boolean(findClickableByText(TEXT.submit)),
+        SIGN_LIMITS.submitButtonTimeout,
+        300
+      );
+      submit = findClickableByText(TEXT.submit);
+    }
+
     if (!submit) return false;
 
     clickElement(submit);
     await wait(1000);
     await tryConfirmSignature();
+    await wait(SIGN_LIMITS.submitSettleDelay);
     return true;
+  };
+
+  const waitForManualSignaturesComplete = async (): Promise<void> => {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < SIGN_LIMITS.manualSignatureTimeout) {
+      if (getPositionCount() <= 0) {
+        return;
+      }
+
+      await wait(1000);
+    }
+
+    throw new Error(
+      `人工签字等待超时，仍有未完成签字数量：${getPositionCount()}`
+    );
+  };
+
+
+  const waitUntil = async (
+    description: string,
+    predicate: () => boolean | Promise<boolean>,
+    timeout: number = 20000,
+    interval: number = 200
+  ): Promise<void> => {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      if (await predicate()) return;
+      await wait(interval);
+    }
+
+    throw new Error(`Wait timeout: ${description}`);
+  };
+
+  const isTopFrame = (): boolean => window.top === window;
+
+  const hasManualSignatureSuccess = (): boolean => {
+    return queryAll<HTMLElement>("uni-modal, .uni-modal")
+      .filter(isVisible)
+      .some((element) => {
+        const text = getElementText(element);
+        return text.includes("签字成功");
+      });
+  };
+
+  const waitForManualSignatureSuccess = async (): Promise<void> => {
+    await waitUntil(
+      "manual signature success",
+      hasManualSignatureSuccess,
+      SIGN_LIMITS.manualSuccessTimeout,
+      500
+    );
+  };
+
+  const waitForSignPageReady = async (): Promise<void> => {
+    if (
+      document.querySelector("iframe") &&
+      !findPositionButton() &&
+      !findClickableByText(TEXT.submit)
+    ) {
+      throw new Error(`当前 frame 是签字容器页，跳过等待：${location.href}`);
+    }
+
+    await waitUntil(
+      "sign page ready",
+      () => Boolean(findPositionButton() || findClickableByText(TEXT.submit)),
+      SIGN_LIMITS.pageReadyTimeout,
+      300
+    );
   };
 
   return (async () => {
     try {
       await wait(SIGN_LIMITS.initialDelay);
 
+      if (signatureMode === "manual") {
+        if (!isTopFrame()) {
+          return {
+            success: false,
+            errorMessage: `Skip child frame in manual mode: ${location.href}`,
+          };
+        }
+
+        await waitForManualSignatureSuccess();
+        return { success: true };
+      }
+
+      await waitForSignPageReady();
       const initialCount = getPositionCount();
       if (!findPositionButton() && initialCount <= 0) {
         return {

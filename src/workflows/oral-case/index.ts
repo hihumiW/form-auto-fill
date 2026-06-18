@@ -13,7 +13,7 @@ import {
   runSignatureFlow,
   saveProtocolRegisterForm,
 } from "@/src/workflows/oral-case/detail-page";
-import { wait } from "@/src/browser/dom";
+import { wait, waitUntil } from "@/src/browser/dom";
 
 async function ensureProtocolRegisterForm(
   caseNumber: string,
@@ -21,7 +21,6 @@ async function ensureProtocolRegisterForm(
 ): Promise<void> {
   if (!isProtocolRegisterPending()) {
     context.log(`口头协议登记表已录入，跳过填写：${caseNumber}`);
-    return;
   }
 
   await openProtocolRegisterForm();
@@ -36,6 +35,12 @@ async function processOneOralCase(
   context: AutomationContext
 ): Promise<void> {
   context.log(`开始处理口头案件：${caseNumber}`);
+
+  await waitUntil('等待口头案件详情加载完成', () => {
+      const caseHeader = document.querySelector<HTMLDivElement>('.case-info-header');
+      console.log(caseHeader?.textContent)
+      return !!caseHeader?.textContent.includes('正在办理')
+  })
 
   await ensureProtocolRegisterForm(caseNumber, context);
 

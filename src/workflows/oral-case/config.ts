@@ -1,5 +1,8 @@
+import type { SignatureMode } from "@/types";
+
 export const ORAL_CASE_CONFIG = {
   listHash: "#/layout/caseManagement/caseHandling/oralProcessing",
+  signatureMode: "manual" as SignatureMode,
   mediationPlace: "调解室",
   mediationResult: "调解成功",
   agreementAmountFallback: "0",
