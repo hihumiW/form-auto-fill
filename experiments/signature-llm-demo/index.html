@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLM Signature Stroke Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system,
+          BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #19202a;
+        background: #f4f6f8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+      }
+
+      main {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 36px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+        font-weight: 720;
+        letter-spacing: 0;
+      }
+
+      .intro {
+        margin: 0 0 22px;
+        color: #5c6675;
+        line-height: 1.6;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+
+      .panel {
+        border: 1px solid #dce2ea;
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 12px 34px rgba(25, 32, 42, 0.06);
+      }
+
+      .controls,
+      .preview {
+        padding: 18px;
+      }
+
+      label {
+        display: block;
+        margin: 0 0 12px;
+        font-size: 13px;
+        font-weight: 650;
+        color: #394353;
+      }
+
+      input,
+      textarea {
+        display: block;
+        width: 100%;
+        margin-top: 6px;
+        border: 1px solid #cfd7e2;
+        border-radius: 6px;
+        padding: 10px 11px;
+        font: inherit;
+        color: #19202a;
+        background: #ffffff;
+        outline: none;
+      }
+
+      textarea {
+        min-height: 92px;
+        resize: vertical;
+      }
+
+      input:focus,
+      textarea:focus {
+        border-color: #2b72d6;
+        box-shadow: 0 0 0 3px rgba(43, 114, 214, 0.14);
+      }
+
+      .name-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 8px;
+        align-items: end;
+      }
+
+      button {
+        border: 1px solid #b8c4d2;
+        border-radius: 6px;
+        padding: 10px 12px;
+        min-height: 40px;
+        font: inherit;
+        font-weight: 650;
+        color: #263241;
+        background: #ffffff;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: #8ca0b8;
+        background: #f7f9fb;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.58;
+      }
+
+      .primary {
+        border-color: #1f66c2;
+        color: #ffffff;
+        background: #246dd1;
+      }
+
+      .primary:hover {
+        border-color: #1b5eb4;
+        background: #1f66c2;
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .hint,
+      .status {
+        font-size: 13px;
+        line-height: 1.55;
+        color: #5c6675;
+      }
+
+      .hint {
+        margin: 10px 0 0;
+      }
+
+      .status {
+        margin-top: 14px;
+        min-height: 22px;
+      }
+
+      .status.error {
+        color: #ba2d2d;
+      }
+
+      .status.ok {
+        color: #21713a;
+      }
+
+      .canvas-shell {
+        border: 1px solid #d8e0ea;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #fffdf8;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: 320px;
+      }
+
+      .result-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        margin-top: 14px;
+      }
+
+      .code-block {
+        min-height: 180px;
+        max-height: 360px;
+        margin: 0;
+        border: 1px solid #dce2ea;
+        border-radius: 8px;
+        padding: 12px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family:
+          "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        color: #263241;
+        background: #fbfcfe;
+      }
+
+      .section-title {
+        margin: 0 0 8px;
+        font-size: 14px;
+        font-weight: 720;
+        color: #303a48;
+      }
+
+      @media (max-width: 860px) {
+        main {
+          width: min(100vw - 20px, 680px);
+          padding-top: 18px;
+        }
+
+        .workspace,
+        .result-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .name-row {
+          grid-template-columns: 1fr;
+        }
+
+        canvas {
+          height: 260px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>LLM &#31614;&#21517;&#22352;&#26631; Demo</h1>
+      <p class="intro">
+        &#22635;&#20889; OpenAI &#20860;&#23481;&#25509;&#21475;&#37197;&#32622;&#21644;&#22995;&#21517;&#65292;&#39029;&#38754;&#35831;&#27714;&#26412;&#22320;&#20195;&#29702;&#65292;&#20877;&#30001;&#20195;&#29702;&#36716;&#21457;&#21040; LLM API&#65292;&#36991;&#20813; CORS &#38480;&#21046;&#12290;
+      </p>
+
+      <div class="workspace">
+        <section class="panel controls">
+          <label>
+            &#31614;&#21517;&#22995;&#21517;
+            <div class="name-row">
+              <input id="nameInput" value="&#26366;&#20613;&#38125;" autocomplete="off" />
+              <button type="button" data-name="&#26366;&#20613;&#38125;">&#26366;&#20613;&#38125;</button>
+              <button type="button" data-name="&#29066;&#23041;">&#29066;&#23041;</button>
+            </div>
+          </label>
+
+          <label>
+            Base URL
+            <input
+              id="baseUrlInput"
+              placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+              autocomplete="off"
+            />
+          </label>
+
+          <label>
+            Model
+            <input id="modelInput" placeholder="qwen-plus / deepseek-chat" autocomplete="off"  />
+          </label>
+
+          <label>
+            API Key
+            <input id="apiKeyInput" type="password" placeholder="sk-..." autocomplete="off" />
+          </label>
+
+          <label>
+            Prompt &#39044;&#35272;
+            <textarea id="promptPreview"></textarea>
+          </label>
+
+          <div class="button-row">
+            <button id="generateButton" class="primary" type="button">&#29983;&#25104;&#31614;&#21517;</button>
+            <button id="redrawButton" type="button" disabled>&#37325;&#32472;</button>
+            <button id="clearButton" type="button">&#28165;&#31354;</button>
+          </div>
+
+          <p class="hint">
+            &#20808;&#36816;&#34892; <code>node server.mjs</code>&#65292;&#20877;&#25171;&#24320; <code>http://localhost:8787</code>&#12290;
+          </p>
+          <div id="status" class="status">&#31561;&#24453;&#36755;&#20837;&#37197;&#32622;&#12290;</div>
+        </section>
+
+        <section class="panel preview">
+          <p class="section-title">&#31614;&#21517;&#39044;&#35272;</p>
+          <div class="canvas-shell">
+            <canvas id="signatureCanvas" width="900" height="320"></canvas>
+          </div>
+
+          <div class="result-grid">
+            <div>
+              <p class="section-title">&#21407;&#22987;&#36820;&#22238;</p>
+              <pre id="rawOutput" class="code-block">&#23578;&#26410;&#35831;&#27714;&#12290;</pre>
+            </div>
+            <div>
+              <p class="section-title">&#35299;&#26512;&#21518;&#30340; strokes</p>
+              <pre id="parsedOutput" class="code-block">&#23578;&#26410;&#35299;&#26512;&#12290;</pre>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const CANVAS_SPACE = 1000;
+      const DRAW_DELAY_MS = 14;
+      const PROXY_URL = "http://localhost:8787/api/chat-completions";
+
+      const zh = {
+        defaultName: "曾傅铭",
+        systemPrompt:
+          "你是中文手写签名轨迹生成器。你必须只输出严格 JSON，不输出 markdown、解释、思考过程、注释或自然语言。你的任务不是写标准楷书，而是生成能看出姓名轮廓的草签轨迹。",
+      };
+
+      const elements = {
+        nameInput: document.querySelector("#nameInput"),
+        baseUrlInput: document.querySelector("#baseUrlInput"),
+        modelInput: document.querySelector("#modelInput"),
+        apiKeyInput: document.querySelector("#apiKeyInput"),
+        promptPreview: document.querySelector("#promptPreview"),
+        generateButton: document.querySelector("#generateButton"),
+        redrawButton: document.querySelector("#redrawButton"),
+        clearButton: document.querySelector("#clearButton"),
+        status: document.querySelector("#status"),
+        rawOutput: document.querySelector("#rawOutput"),
+        parsedOutput: document.querySelector("#parsedOutput"),
+        canvas: document.querySelector("#signatureCanvas"),
+      };
+
+    
+
+      const context = elements.canvas.getContext("2d");
+      let latestStrokes = null;
+      let activeDrawToken = 0;
+
+      function buildPrompt(name) {
+        return [
+          "/no_think",
+          "请为中文姓名「" + name + "」生成一份手写草签轨迹坐标。",
+          "",
+          "核心目标：看起来像人在签自己的名字，而不是像机器在逐笔描楷书。",
+          "",
+          "输出格式：",
+          '1. 只返回 JSON，顶层结构必须是 {"strokes": [[[x, y], ...], ...]}。',
+          "2. 不要 markdown，不要解释，不要“思考过程”，不要在 JSON 前后追加任何文字。",
+          "3. 坐标使用 0 到 1000 的归一化画布，x 从左到右，y 从上到下。",
+          "",
+          "签名风格：",
+          "1. 使用横向草签/行书风格，整体宽扁，落在 x=90..910、y=260..720 区域。",
+          "2. 不要把每个字拆成很多孤立部件；优先用少量长 stroke 连续写完一个字或半个字。",
+          "3. 两字姓名建议 4 到 8 个 stroke；三字姓名建议 6 到 12 个 stroke。",
+          "4. 每个 stroke 建议 8 到 28 个点，相邻点距离要平滑，不要出现大跳跃。",
+          "5. 每个字要保留关键轮廓，但允许省略细小笔画、连笔、压扁、倾斜。",
+          "6. 字与字之间要有自然连接或轻微重叠，不要分散成几个互不相关的图案。",
+          "7. 避免封闭的大圆圈、重复波浪线、几何图形、符号化涂鸦。",
+          "",
+          "构图要求：",
+          "1. 姓名整体居中，基线大约在 y=560 附近。",
+          "2. 起笔不要太靠左，收笔可以有自然拖尾。",
+          "3. stroke 顺序要符合从左到右、从上到下的大致书写顺序。",
+          "",
+          "如果你不确定具体笔顺，也要优先生成连续、自然、像签名的轨迹。",
+          "期望示例格式：",
+          '{"strokes":[[[120,420],[180,360],[240,390]],[[300,220],[280,560],[430,620]]]}',
+        ].join("\n");
+      }
+
+      function updatePromptPreview() {
+        elements.promptPreview.value = buildPrompt(elements.nameInput.value.trim() || zh.defaultName);
+      }
+
+      function setStatus(message, type) {
+        elements.status.textContent = message;
+        elements.status.className = "status" + (type ? " " + type : "");
+      }
+
+      function clearCanvas() {
+        activeDrawToken += 1;
+        context.clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+        drawGuide();
+      }
+
+      function drawGuide() {
+        const width = elements.canvas.width;
+        const height = elements.canvas.height;
+
+        context.save();
+        context.fillStyle = "#fffdf8";
+        context.fillRect(0, 0, width, height);
+        context.strokeStyle = "#eee6d8";
+        context.lineWidth = 1;
+
+        for (let x = 0; x <= width; x += 60) {
+          context.beginPath();
+          context.moveTo(x, 0);
+          context.lineTo(x, height);
+          context.stroke();
+        }
+
+        for (let y = 0; y <= height; y += 60) {
+          context.beginPath();
+          context.moveTo(0, y);
+          context.lineTo(width, y);
+          context.stroke();
+        }
+
+        context.strokeStyle = "#d9c9ad";
+        context.setLineDash([8, 8]);
+        context.beginPath();
+        context.moveTo(0, height * 0.58);
+        context.lineTo(width, height * 0.58);
+        context.stroke();
+        context.restore();
+      }
+
+      function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+      }
+
+      function normalizePoint(point) {
+        return [
+          clamp(Number(point[0]), 0, CANVAS_SPACE),
+          clamp(Number(point[1]), 0, CANVAS_SPACE),
+        ];
+      }
+
+      function validateStrokes(value) {
+        if (!value || !Array.isArray(value.strokes)) {
+          throw new Error("JSON top-level value must contain a strokes array.");
+        }
+
+        const strokes = value.strokes.map((stroke, strokeIndex) => {
+          if (!Array.isArray(stroke) || stroke.length < 2) {
+            throw new Error("Stroke " + (strokeIndex + 1) + " needs at least 2 points.");
+          }
+
+          return stroke.map((point, pointIndex) => {
+            if (
+              !Array.isArray(point) ||
+              point.length < 2 ||
+              !Number.isFinite(Number(point[0])) ||
+              !Number.isFinite(Number(point[1]))
+            ) {
+              throw new Error(
+                "Point " + (pointIndex + 1) + " in stroke " + (strokeIndex + 1) + " is invalid."
+              );
+            }
+
+            return normalizePoint(point);
+          });
+        });
+
+        if (!strokes.length) {
+          throw new Error("strokes cannot be empty.");
+        }
+
+        return { strokes };
+      }
+
+      function extractMessageContent(responseJson) {
+        const content = responseJson?.choices?.[0]?.message?.content;
+
+        if (typeof content === "string") {
+          return content;
+        }
+
+        if (Array.isArray(content)) {
+          return content
+            .map((item) => {
+              if (typeof item === "string") return item;
+              if (typeof item?.text === "string") return item.text;
+              return "";
+            })
+            .join("");
+        }
+
+        throw new Error("Response is missing choices[0].message.content.");
+      }
+
+      function parseJsonContent(content) {
+        const trimmed = content.trim();
+
+        try {
+          return JSON.parse(trimmed);
+        } catch {
+          const match = trimmed.match(/\{[\s\S]*\}/);
+          if (!match) {
+            throw new Error("LLM content is not parseable JSON.");
+          }
+          return JSON.parse(match[0]);
+        }
+      }
+
+      function mapToCanvas(point) {
+        return [
+          (point[0] / CANVAS_SPACE) * elements.canvas.width,
+          (point[1] / CANVAS_SPACE) * elements.canvas.height,
+        ];
+      }
+
+      function wait(duration) {
+        return new Promise((resolve) => window.setTimeout(resolve, duration));
+      }
+
+      async function drawStrokes(strokes) {
+        const drawToken = ++activeDrawToken;
+        clearCanvas();
+        activeDrawToken = drawToken;
+
+        context.save();
+        context.lineWidth = 4;
+        context.lineCap = "round";
+        context.lineJoin = "round";
+        context.strokeStyle = "#111827";
+
+        for (const stroke of strokes) {
+          if (drawToken !== activeDrawToken) break;
+
+          const first = mapToCanvas(stroke[0]);
+          context.beginPath();
+          context.moveTo(first[0], first[1]);
+
+          for (const point of stroke.slice(1)) {
+            if (drawToken !== activeDrawToken) break;
+            const mapped = mapToCanvas(point);
+            context.lineTo(mapped[0], mapped[1]);
+            context.stroke();
+            await wait(DRAW_DELAY_MS);
+          }
+
+          await wait(80);
+        }
+
+        context.restore();
+      }
+
+      async function requestSignature() {
+        const name = elements.nameInput.value.trim();
+        const baseUrl = elements.baseUrlInput.value.trim().replace(/\/$/, "");
+        const model = elements.modelInput.value.trim();
+        const apiKey = elements.apiKeyInput.value.trim();
+
+        if (!name) throw new Error("Please input a signature name.");
+        if (!baseUrl) throw new Error("Please input Base URL.");
+        if (!model) throw new Error("Please input Model.");
+        if (!apiKey) throw new Error("Please input API Key.");
+
+        const prompt = elements.promptPreview.value.trim() || buildPrompt(name);
+        const response = await fetch(PROXY_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            baseUrl,
+            apiKey,
+            requestBody: {
+              model,
+              messages: [
+                { role: "system", content: zh.systemPrompt },
+                { role: "user", content: prompt },
+              ],
+              temperature: 0.45,
+              top_p: 0.8,
+              enable_thinking: false,
+              response_format: { type: "json_object" },
+            },
+          }),
+        });
+
+        const responseText = await response.text();
+        let responseJson;
+
+        try {
+          responseJson = JSON.parse(responseText);
+        } catch {
+          throw new Error("Proxy returned non-JSON: " + responseText.slice(0, 500));
+        }
+
+        elements.rawOutput.textContent = JSON.stringify(responseJson, null, 2);
+
+        if (!response.ok) {
+          throw new Error(
+            "LLM request failed: " +
+              response.status +
+              " " +
+              (responseJson?.error?.message || responseJson?.message || response.statusText)
+          );
+        }
+
+        const content = extractMessageContent(responseJson);
+        const parsed = validateStrokes(parseJsonContent(content));
+        elements.parsedOutput.textContent = JSON.stringify(parsed, null, 2);
+        return parsed.strokes;
+      }
+
+      async function handleGenerate() {
+        elements.generateButton.disabled = true;
+        elements.redrawButton.disabled = true;
+        setStatus("Requesting LLM and parsing signature strokes...", "");
+
+        try {
+          const strokes = await requestSignature();
+          latestStrokes = strokes;
+          elements.redrawButton.disabled = false;
+          setStatus("Generated. Drawing...", "ok");
+          await drawStrokes(strokes);
+          setStatus("Done.", "ok");
+        } catch (error) {
+          setStatus(error?.message || "Generate failed.", "error");
+          elements.parsedOutput.textContent = "Parse failed.";
+        } finally {
+          elements.generateButton.disabled = false;
+        }
+      }
+
+      elements.nameInput.addEventListener("input", updatePromptPreview);
+      document.querySelectorAll("[data-name]").forEach((button) => {
+        button.addEventListener("click", () => {
+          elements.nameInput.value = button.dataset.name;
+          updatePromptPreview();
+        });
+      });
+      elements.generateButton.addEventListener("click", handleGenerate);
+      elements.redrawButton.addEventListener("click", () => {
+        if (latestStrokes) {
+          drawStrokes(latestStrokes);
+        }
+      });
+      elements.clearButton.addEventListener("click", () => {
+        clearCanvas();
+        setStatus("Canvas cleared.", "");
+      });
+
+      updatePromptPreview();
+      clearCanvas();
+    </script>
+  </body>
+</html>

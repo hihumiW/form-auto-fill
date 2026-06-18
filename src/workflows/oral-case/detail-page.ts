@@ -266,6 +266,7 @@ async function clickModalConfirmButton(modal: HTMLElement): Promise<void> {
 }
 
 async function selectAllModalDocuments(modal: HTMLElement): Promise<void> {
+  await wait(300);
   const checkboxes = Array.from(
     modal.querySelectorAll<HTMLInputElement>("input[type='checkbox']")
   ).filter((input) => !input.disabled);

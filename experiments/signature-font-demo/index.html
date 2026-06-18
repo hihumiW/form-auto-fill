@@ -1,0 +1,1599 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Font Signature Path Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/opentype.js@1.3.3/dist/opentype.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system,
+          BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #18212f;
+        background: #f5f7fa;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+      }
+
+      main {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 36px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+        font-weight: 720;
+        letter-spacing: 0;
+      }
+
+      .intro {
+        margin: 0 0 22px;
+        color: #586373;
+        line-height: 1.65;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+
+      .panel {
+        border: 1px solid #dce3ec;
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 12px 34px rgba(24, 33, 47, 0.06);
+      }
+
+      .controls,
+      .preview {
+        padding: 18px;
+      }
+
+      label {
+        display: block;
+        margin: 0 0 13px;
+        font-size: 13px;
+        font-weight: 650;
+        color: #364254;
+      }
+
+      input,
+      select {
+        display: block;
+        width: 100%;
+        margin-top: 6px;
+        border: 1px solid #cfd8e5;
+        border-radius: 6px;
+        padding: 10px 11px;
+        font: inherit;
+        color: #18212f;
+        background: #ffffff;
+        outline: none;
+      }
+
+      input:focus,
+      select:focus {
+        border-color: #2870d8;
+        box-shadow: 0 0 0 3px rgba(40, 112, 216, 0.14);
+      }
+
+      .name-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 8px;
+        align-items: end;
+      }
+
+      .range-grid {
+        display: grid;
+        grid-template-columns: 1fr 64px;
+        gap: 10px;
+        align-items: center;
+      }
+
+      button {
+        border: 1px solid #b9c6d5;
+        border-radius: 6px;
+        padding: 10px 12px;
+        min-height: 40px;
+        font: inherit;
+        font-weight: 650;
+        color: #263241;
+        background: #ffffff;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: #879bb4;
+        background: #f7f9fb;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.58;
+      }
+
+      .primary {
+        border-color: #1f66c2;
+        color: #ffffff;
+        background: #246dd1;
+      }
+
+      .primary:hover {
+        border-color: #1b5eb4;
+        background: #1f66c2;
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .subsection {
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid #e3e8ef;
+      }
+
+      .hint,
+      .status {
+        font-size: 13px;
+        line-height: 1.55;
+        color: #5f6b7b;
+      }
+
+      .hint {
+        margin: 10px 0 0;
+      }
+
+      .status {
+        margin-top: 14px;
+        min-height: 22px;
+      }
+
+      .status.error {
+        color: #b62828;
+      }
+
+      .status.ok {
+        color: #1f7139;
+      }
+
+      .canvas-shell {
+        border: 1px solid #d8e0ea;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #fffdf8;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: 360px;
+      }
+
+      .output-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        margin-top: 14px;
+      }
+
+      .section-title {
+        margin: 0 0 8px;
+        font-size: 14px;
+        font-weight: 720;
+        color: #303a48;
+      }
+
+      .code-block {
+        min-height: 180px;
+        max-height: 340px;
+        margin: 0;
+        border: 1px solid #dce3ec;
+        border-radius: 8px;
+        padding: 12px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family:
+          "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        color: #263241;
+        background: #fbfcfe;
+      }
+
+      @media (max-width: 860px) {
+        main {
+          width: min(100vw - 20px, 680px);
+          padding-top: 18px;
+        }
+
+        .workspace,
+        .output-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .name-row {
+          grid-template-columns: 1fr;
+        }
+
+        canvas {
+          height: 280px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>字体 Path 签名 Demo</h1>
+      <p class="intro">
+        上传一个中文字体文件，把姓名转成字体轮廓 path，再采样成 strokes 预览。这个 MVP 先验证“稳定像名字”，暂时不是最终手写中心线。
+      </p>
+
+      <div class="workspace">
+        <section class="panel controls">
+          <label>
+            签名姓名
+            <div class="name-row">
+              <input id="nameInput" value="曾傅铭" autocomplete="off" />
+              <button type="button" data-name="曾傅铭">曾傅铭</button>
+              <button type="button" data-name="熊威">熊威</button>
+            </div>
+          </label>
+
+          <label>
+            字体文件 (.ttf / .otf)
+            <input id="fontInput" type="file" accept=".ttf,.otf,font/ttf,font/otf" />
+          </label>
+
+          <label>
+            预览模式
+            <select id="modeInput">
+              <option value="solid">实心 path</option>
+              <option value="outline">轮廓 path</option>
+              <option value="strokes">采样 strokes</option>
+              <option value="skeleton">骨架 strokes</option>
+              <option value="fill">填充 strokes</option>
+              <option value="both" selected>轮廓 + strokes</option>
+              <option value="solidSkeleton">实心 + 骨架</option>
+              <option value="outlineSkeleton">轮廓 + 骨架</option>
+              <option value="outlineFill">轮廓 + 填充</option>
+            </select>
+          </label>
+
+          <label>
+            字号
+            <div class="range-grid">
+              <input id="fontSizeInput" type="range" min="120" max="420" value="260" />
+              <input id="fontSizeValue" type="number" min="120" max="420" value="260" />
+            </div>
+          </label>
+
+          <label>
+            横向压缩
+            <div class="range-grid">
+              <input id="scaleXInput" type="range" min="45" max="120" value="78" />
+              <input id="scaleXValue" type="number" min="45" max="120" value="78" />
+            </div>
+          </label>
+
+          <label>
+            右倾程度
+            <div class="range-grid">
+              <input id="slantInput" type="range" min="-35" max="35" value="12" />
+              <input id="slantValue" type="number" min="-35" max="35" value="12" />
+            </div>
+          </label>
+
+          <label>
+            采样密度
+            <div class="range-grid">
+              <input id="sampleInput" type="range" min="4" max="28" value="12" />
+              <input id="sampleValue" type="number" min="4" max="28" value="12" />
+            </div>
+          </label>
+
+          <label>
+            字迹扰动
+            <div class="range-grid">
+              <input id="jitterInput" type="range" min="0" max="18" value="3" />
+              <input id="jitterValue" type="number" min="0" max="18" value="3" />
+            </div>
+          </label>
+
+          <div class="button-row">
+            <button id="renderButton" class="primary" type="button">生成预览</button>
+            <button id="redrawButton" type="button" disabled>重绘 strokes</button>
+            <button id="exportSolidButton" type="button" disabled>导出实心 PNG</button>
+            <button id="copyInjectButton" type="button" disabled>复制注入脚本</button>
+            <button id="clearButton" type="button">清空</button>
+          </div>
+
+          <div class="subsection">
+            <label>
+              LLM Base URL
+              <input
+                id="llmBaseUrlInput"
+                placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                autocomplete="off"
+              />
+            </label>
+
+            <label>
+              LLM Model
+              <input id="llmModelInput" placeholder="qwen-plus / deepseek-chat" autocomplete="off" />
+            </label>
+
+            <label>
+              LLM API Key
+              <input id="llmApiKeyInput" type="password" placeholder="sk-..." autocomplete="off" />
+            </label>
+
+            <label>
+              LLM 创造强度
+              <select id="llmModeInput">
+                <option value="safe" selected>稳健修正</option>
+                <option value="bold">大胆重构</option>
+              </select>
+            </label>
+
+            <div class="button-row">
+              <button id="llmOptimizeButton" type="button" disabled>LLM 优化当前 strokes</button>
+            </div>
+          </div>
+
+          <p class="hint">
+            建议先试行楷、手写体、签名字体；楷体会更稳地像字，但签名感较弱。LLM 优化需要先运行 signature-llm-demo 的 node server.mjs 代理。
+          </p>
+          <div id="status" class="status">等待上传字体。</div>
+        </section>
+
+        <section class="panel preview">
+          <p class="section-title">签名预览</p>
+          <div class="canvas-shell">
+            <canvas id="signatureCanvas" width="960" height="360"></canvas>
+          </div>
+
+          <div class="output-grid">
+            <div>
+              <p class="section-title">SVG path data</p>
+              <pre id="pathOutput" class="code-block">尚未生成。</pre>
+            </div>
+            <div>
+              <p class="section-title">采样 strokes</p>
+              <pre id="strokesOutput" class="code-block">尚未生成。</pre>
+            </div>
+          </div>
+
+          <div style="margin-top: 14px">
+            <p class="section-title">实心 PNG / 注入脚本</p>
+            <pre id="solidOutput" class="code-block">尚未导出。</pre>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const CANVAS_SPACE = 1000;
+      const DRAW_DELAY_MS = 10;
+      const LLM_PROXY_URL = "http://localhost:8787/api/chat-completions";
+
+      const elements = {
+        nameInput: document.querySelector("#nameInput"),
+        fontInput: document.querySelector("#fontInput"),
+        modeInput: document.querySelector("#modeInput"),
+        fontSizeInput: document.querySelector("#fontSizeInput"),
+        fontSizeValue: document.querySelector("#fontSizeValue"),
+        scaleXInput: document.querySelector("#scaleXInput"),
+        scaleXValue: document.querySelector("#scaleXValue"),
+        slantInput: document.querySelector("#slantInput"),
+        slantValue: document.querySelector("#slantValue"),
+        sampleInput: document.querySelector("#sampleInput"),
+        sampleValue: document.querySelector("#sampleValue"),
+        jitterInput: document.querySelector("#jitterInput"),
+        jitterValue: document.querySelector("#jitterValue"),
+        llmBaseUrlInput: document.querySelector("#llmBaseUrlInput"),
+        llmModelInput: document.querySelector("#llmModelInput"),
+        llmApiKeyInput: document.querySelector("#llmApiKeyInput"),
+        llmModeInput: document.querySelector("#llmModeInput"),
+        llmOptimizeButton: document.querySelector("#llmOptimizeButton"),
+        renderButton: document.querySelector("#renderButton"),
+        redrawButton: document.querySelector("#redrawButton"),
+        exportSolidButton: document.querySelector("#exportSolidButton"),
+        copyInjectButton: document.querySelector("#copyInjectButton"),
+        clearButton: document.querySelector("#clearButton"),
+        status: document.querySelector("#status"),
+        pathOutput: document.querySelector("#pathOutput"),
+        strokesOutput: document.querySelector("#strokesOutput"),
+        solidOutput: document.querySelector("#solidOutput"),
+        canvas: document.querySelector("#signatureCanvas"),
+      };
+
+      const context = elements.canvas.getContext("2d");
+      let loadedFont = null;
+      let latestStrokes = null;
+      let latestStrokeWidth = 4;
+      let latestStrokeSource = "none";
+      let latestSolidDataUrl = "";
+      let activeDrawToken = 0;
+
+      function setStatus(message, type) {
+        elements.status.textContent = message;
+        elements.status.className = "status" + (type ? " " + type : "");
+      }
+
+      function showError(error, fallbackMessage = "操作失败。") {
+        setStatus(error?.message || fallbackMessage, "error");
+      }
+
+      function rerenderIfReady() {
+        if (loadedFont) {
+          renderSignature().catch((error) => showError(error, "生成失败。"));
+        }
+      }
+
+      function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+      }
+
+      function lerp(start, end, ratio) {
+        return start + (end - start) * ratio;
+      }
+
+      function cubicPoint(p0, p1, p2, p3, t) {
+        const inv = 1 - t;
+        return {
+          x:
+            inv * inv * inv * p0.x +
+            3 * inv * inv * t * p1.x +
+            3 * inv * t * t * p2.x +
+            t * t * t * p3.x,
+          y:
+            inv * inv * inv * p0.y +
+            3 * inv * inv * t * p1.y +
+            3 * inv * t * t * p2.y +
+            t * t * t * p3.y,
+        };
+      }
+
+      function quadraticPoint(p0, p1, p2, t) {
+        const inv = 1 - t;
+        return {
+          x: inv * inv * p0.x + 2 * inv * t * p1.x + t * t * p2.x,
+          y: inv * inv * p0.y + 2 * inv * t * p1.y + t * t * p2.y,
+        };
+      }
+
+      function syncRange(rangeInput, numberInput) {
+        const sync = (source, target) => {
+          target.value = source.value;
+          rerenderIfReady();
+        };
+        rangeInput.addEventListener("input", () => sync(rangeInput, numberInput));
+        numberInput.addEventListener("input", () => sync(numberInput, rangeInput));
+      }
+
+      function clearCanvas() {
+        activeDrawToken += 1;
+        context.clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+        drawGuide();
+      }
+
+      function drawGuide() {
+        const width = elements.canvas.width;
+        const height = elements.canvas.height;
+
+        context.save();
+        context.fillStyle = "#fffdf8";
+        context.fillRect(0, 0, width, height);
+        context.strokeStyle = "#eee6d8";
+        context.lineWidth = 1;
+
+        for (let x = 0; x <= width; x += 60) {
+          context.beginPath();
+          context.moveTo(x, 0);
+          context.lineTo(x, height);
+          context.stroke();
+        }
+
+        for (let y = 0; y <= height; y += 60) {
+          context.beginPath();
+          context.moveTo(0, y);
+          context.lineTo(width, y);
+          context.stroke();
+        }
+
+        context.strokeStyle = "#d9c9ad";
+        context.setLineDash([8, 8]);
+        context.beginPath();
+        context.moveTo(0, height * 0.62);
+        context.lineTo(width, height * 0.62);
+        context.stroke();
+        context.restore();
+      }
+
+      function pathToContours(path, samplesPerCurve) {
+        const contours = [];
+        let current = null;
+        let cursor = { x: 0, y: 0 };
+        let start = null;
+
+        for (const command of path.commands) {
+          if (command.type === "M") {
+            current = [{ x: command.x, y: command.y }];
+            contours.push(current);
+            cursor = { x: command.x, y: command.y };
+            start = cursor;
+          } else if (command.type === "L" && current) {
+            current.push({ x: command.x, y: command.y });
+            cursor = { x: command.x, y: command.y };
+          } else if (command.type === "C" && current) {
+            const end = { x: command.x, y: command.y };
+            for (let i = 1; i <= samplesPerCurve; i += 1) {
+              current.push(
+                cubicPoint(
+                  cursor,
+                  { x: command.x1, y: command.y1 },
+                  { x: command.x2, y: command.y2 },
+                  end,
+                  i / samplesPerCurve
+                )
+              );
+            }
+            cursor = end;
+          } else if (command.type === "Q" && current) {
+            const end = { x: command.x, y: command.y };
+            for (let i = 1; i <= samplesPerCurve; i += 1) {
+              current.push(
+                quadraticPoint(cursor, { x: command.x1, y: command.y1 }, end, i / samplesPerCurve)
+              );
+            }
+            cursor = end;
+          } else if (command.type === "Z" && current && start) {
+            current.push({ x: start.x, y: start.y });
+          }
+        }
+
+        return contours.filter((contour) => contour.length > 1);
+      }
+
+      function getBounds(contours) {
+        const points = contours.flat();
+        return points.reduce(
+          (bounds, point) => ({
+            minX: Math.min(bounds.minX, point.x),
+            maxX: Math.max(bounds.maxX, point.x),
+            minY: Math.min(bounds.minY, point.y),
+            maxY: Math.max(bounds.maxY, point.y),
+          }),
+          { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+        );
+      }
+
+      function getCanvasBounds(contours) {
+        return getBounds(contours);
+      }
+
+      function transformContours(contours) {
+        const bounds = getBounds(contours);
+        const sourceWidth = Math.max(1, bounds.maxX - bounds.minX);
+        const sourceHeight = Math.max(1, bounds.maxY - bounds.minY);
+        const padding = 52;
+        const targetWidth = elements.canvas.width - padding * 2;
+        const targetHeight = elements.canvas.height - padding * 2;
+        const fitScale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+        const scaleX = Number(elements.scaleXInput.value) / 100;
+        const slant = Number(elements.slantInput.value) / 100;
+        const jitter = Number(elements.jitterInput.value);
+
+        const fittedWidth = sourceWidth * fitScale * scaleX;
+        const fittedHeight = sourceHeight * fitScale;
+        const offsetX = (elements.canvas.width - fittedWidth) / 2;
+        const offsetY = (elements.canvas.height - fittedHeight) / 2;
+
+        return contours.map((contour, contourIndex) =>
+          contour.map((point, pointIndex) => {
+            const localX = (point.x - bounds.minX) * fitScale * scaleX;
+            const localY = (point.y - bounds.minY) * fitScale;
+            const baselineShift = (localY - fittedHeight * 0.52) * slant;
+            const noiseSeed = Math.sin((contourIndex + 1) * 31.17 + (pointIndex + 1) * 17.43);
+            const noise = noiseSeed * jitter;
+
+            return {
+              x: offsetX + localX + baselineShift + noise,
+              y: offsetY + localY + noise * 0.45,
+            };
+          })
+        );
+      }
+
+      function contoursToNormalizedStrokes(contours) {
+        return contours.map((contour) =>
+          contour.map((point) => [
+            Math.round(clamp((point.x / elements.canvas.width) * CANVAS_SPACE, 0, CANVAS_SPACE)),
+            Math.round(clamp((point.y / elements.canvas.height) * CANVAS_SPACE, 0, CANVAS_SPACE)),
+          ])
+        );
+      }
+
+      function pointsToNormalizedStrokes(pointStrokes) {
+        return pointStrokes.map((stroke) =>
+          stroke.map((point) => [
+            Math.round(clamp((point.x / elements.canvas.width) * CANVAS_SPACE, 0, CANVAS_SPACE)),
+            Math.round(clamp((point.y / elements.canvas.height) * CANVAS_SPACE, 0, CANVAS_SPACE)),
+          ])
+        );
+      }
+
+      function validateNormalizedStrokes(value) {
+        if (!value || !Array.isArray(value.strokes)) {
+          throw new Error("LLM 返回 JSON 必须包含 strokes 数组。");
+        }
+
+        const strokes = value.strokes.map((stroke, strokeIndex) => {
+          if (!Array.isArray(stroke) || stroke.length < 2) {
+            throw new Error(`第 ${strokeIndex + 1} 条 stroke 至少需要 2 个点。`);
+          }
+
+          return stroke.map((point, pointIndex) => {
+            if (
+              !Array.isArray(point) ||
+              point.length < 2 ||
+              !Number.isFinite(Number(point[0])) ||
+              !Number.isFinite(Number(point[1]))
+            ) {
+              throw new Error(
+                `第 ${strokeIndex + 1} 条 stroke 的第 ${pointIndex + 1} 个点不是有效坐标。`
+              );
+            }
+
+            return [
+              Math.round(clamp(Number(point[0]), 0, CANVAS_SPACE)),
+              Math.round(clamp(Number(point[1]), 0, CANVAS_SPACE)),
+            ];
+          });
+        });
+
+        return { strokes: strokes.filter((stroke) => stroke.length > 1) };
+      }
+
+      function getNormalizedStrokeBounds(strokes) {
+        const points = strokes.flat();
+        return points.reduce(
+          (bounds, point) => ({
+            minX: Math.min(bounds.minX, point[0]),
+            maxX: Math.max(bounds.maxX, point[0]),
+            minY: Math.min(bounds.minY, point[1]),
+            maxY: Math.max(bounds.maxY, point[1]),
+          }),
+          { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+        );
+      }
+
+      function normalizedStrokeLength(strokes) {
+        return strokes.reduce((total, stroke) => {
+          let strokeLength = 0;
+          for (let index = 1; index < stroke.length; index += 1) {
+            strokeLength += Math.hypot(
+              stroke[index][0] - stroke[index - 1][0],
+              stroke[index][1] - stroke[index - 1][1]
+            );
+          }
+          return total + strokeLength;
+        }, 0);
+      }
+
+      function validateLlmResultQuality(originalStrokes, optimizedStrokes) {
+        const originalCount = originalStrokes.length;
+        const minCount = Math.max(6, Math.floor(originalCount * 0.5));
+        const maxCount = Math.max(minCount + 2, Math.ceil(originalCount * 1.2));
+
+        if (optimizedStrokes.length < minCount || optimizedStrokes.length > maxCount) {
+          throw new Error(
+            `LLM 输出 stroke 数量异常：${optimizedStrokes.length}，期望 ${minCount}-${maxCount}。`
+          );
+        }
+
+        const originalBounds = getNormalizedStrokeBounds(originalStrokes);
+        const optimizedBounds = getNormalizedStrokeBounds(optimizedStrokes);
+        const originalWidth = Math.max(1, originalBounds.maxX - originalBounds.minX);
+        const originalHeight = Math.max(1, originalBounds.maxY - originalBounds.minY);
+        const optimizedWidth = optimizedBounds.maxX - optimizedBounds.minX;
+        const optimizedHeight = optimizedBounds.maxY - optimizedBounds.minY;
+
+        if (optimizedWidth > originalWidth * 1.45 || optimizedHeight > originalHeight * 1.45) {
+          throw new Error("LLM 输出范围扩张过大，已拒绝覆盖当前结果。");
+        }
+
+        const originalLength = normalizedStrokeLength(originalStrokes);
+        const optimizedLength = normalizedStrokeLength(optimizedStrokes);
+
+        if (optimizedLength > originalLength * 1.55 || optimizedLength < originalLength * 0.35) {
+          throw new Error("LLM 输出总轨迹长度异常，已拒绝覆盖当前结果。");
+        }
+      }
+
+      function makeCanvasPath(contours) {
+        const path = new Path2D();
+        for (const contour of contours) {
+          path.moveTo(contour[0].x, contour[0].y);
+          for (const point of contour.slice(1)) {
+            path.lineTo(point.x, point.y);
+          }
+        }
+        return path;
+      }
+
+      function drawOutline(contours) {
+        context.save();
+        context.strokeStyle = "rgba(25, 32, 42, 0.72)";
+        context.lineWidth = 2;
+        context.lineJoin = "round";
+        context.lineCap = "round";
+        context.stroke(makeCanvasPath(contours));
+        context.restore();
+      }
+
+      function drawSolidPath(contours) {
+        context.save();
+        context.fillStyle = "#111827";
+        context.fill(makeCanvasPath(contours));
+        context.restore();
+      }
+
+      function renderSolidDataUrl(contours) {
+        const exportCanvas = document.createElement("canvas");
+        exportCanvas.width = elements.canvas.width;
+        exportCanvas.height = elements.canvas.height;
+        const exportContext = exportCanvas.getContext("2d");
+        exportContext.fillStyle = "#111827";
+        exportContext.fill(makeCanvasPath(contours));
+        return exportCanvas.toDataURL("image/png");
+      }
+
+      function buildCanvasInjectScript(dataUrl) {
+        return `(() => {
+  const dataUrl = ${JSON.stringify(dataUrl)};
+  const canvas =
+    document.querySelector("canvas") ||
+    document.querySelector(".signature canvas") ||
+    document.querySelector("[class*='sign'] canvas");
+  if (!canvas) {
+    throw new Error("没有找到签字 canvas");
+  }
+  const ctx = canvas.getContext("2d");
+  const image = new Image();
+  image.onload = () => {
+    const paddingX = canvas.width * 0.08;
+    const paddingY = canvas.height * 0.12;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(
+      image,
+      paddingX,
+      paddingY,
+      canvas.width - paddingX * 2,
+      canvas.height - paddingY * 2
+    );
+    canvas.dispatchEvent(new Event("input", { bubbles: true }));
+    canvas.dispatchEvent(new Event("change", { bubbles: true }));
+    canvas.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  };
+  image.src = dataUrl;
+})();`;
+      }
+
+      function makeFillPointStrokes(contours) {
+        const path = makeCanvasPath(contours);
+        const bounds = getCanvasBounds(contours);
+        const sampleDensity = Number(elements.sampleInput.value);
+        const jitter = Number(elements.jitterInput.value) * 0.42;
+        const slant = Number(elements.slantInput.value);
+        const spacing = clamp(28 - sampleDensity * 1.1, 9, 24);
+        const scanStep = 4;
+        const inset = 5;
+        const minRunLength = 18;
+        const angle = ((-16 + slant * 0.22) * Math.PI) / 180;
+        const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+        const normal = { x: -direction.y, y: direction.x };
+        const center = {
+          x: (bounds.minX + bounds.maxX) / 2,
+          y: (bounds.minY + bounds.maxY) / 2,
+        };
+        const corners = [
+          { x: bounds.minX, y: bounds.minY },
+          { x: bounds.maxX, y: bounds.minY },
+          { x: bounds.maxX, y: bounds.maxY },
+          { x: bounds.minX, y: bounds.maxY },
+        ];
+        const projections = corners.map((point) => ({
+          normal: (point.x - center.x) * normal.x + (point.y - center.y) * normal.y,
+          direction: (point.x - center.x) * direction.x + (point.y - center.y) * direction.y,
+        }));
+        const minNormal = Math.min(...projections.map((item) => item.normal)) - spacing;
+        const maxNormal = Math.max(...projections.map((item) => item.normal)) + spacing;
+        const minDirection = Math.min(...projections.map((item) => item.direction)) - spacing;
+        const maxDirection = Math.max(...projections.map((item) => item.direction)) + spacing;
+        const fillStrokes = [];
+        let lineIndex = 0;
+
+        for (let offset = minNormal; offset <= maxNormal; offset += spacing) {
+          const runs = [];
+          let runStart = null;
+
+          for (let distance = minDirection; distance <= maxDirection + scanStep; distance += scanStep) {
+            const x = center.x + normal.x * offset + direction.x * distance;
+            const y = center.y + normal.y * offset + direction.y * distance;
+            const inside = distance <= maxDirection && context.isPointInPath(path, x, y);
+
+            if (inside && runStart === null) {
+              runStart = distance;
+            } else if (!inside && runStart !== null) {
+              const runEnd = distance - scanStep;
+              if (runEnd - runStart >= minRunLength) {
+                runs.push([runStart + inset, runEnd - inset]);
+              }
+              runStart = null;
+            }
+          }
+
+          runs.forEach((run, runIndex) => {
+            const runLength = run[1] - run[0];
+            const pointCount = clamp(Math.ceil(runLength / 28), 3, 14);
+            const reverse = (lineIndex + runIndex) % 2 === 1;
+            const start = reverse ? run[1] : run[0];
+            const end = reverse ? run[0] : run[1];
+            const stroke = [];
+
+            for (let index = 0; index < pointCount; index += 1) {
+              const ratio = pointCount === 1 ? 0 : index / (pointCount - 1);
+              const distance = lerp(start, end, ratio);
+              const noise = Math.sin((lineIndex + 1) * 19.13 + (runIndex + 1) * 7.91 + index * 3.17) * jitter;
+              const wobble = Math.sin(ratio * Math.PI) * jitter * 0.6;
+              stroke.push({
+                x: center.x + normal.x * (offset + noise) + direction.x * distance,
+                y: center.y + normal.y * (offset + noise) + direction.y * distance + wobble,
+              });
+            }
+
+            fillStrokes.push(stroke);
+          });
+
+          lineIndex += 1;
+        }
+
+        return fillStrokes.filter((stroke) => stroke.length > 2);
+      }
+
+      function rasterizeContours(contours) {
+        const scale = 0.75;
+        const width = Math.ceil(elements.canvas.width * scale);
+        const height = Math.ceil(elements.canvas.height * scale);
+        const rasterCanvas = document.createElement("canvas");
+        rasterCanvas.width = width;
+        rasterCanvas.height = height;
+        const rasterContext = rasterCanvas.getContext("2d");
+
+        rasterContext.save();
+        rasterContext.scale(scale, scale);
+        rasterContext.fillStyle = "#000";
+        rasterContext.fill(makeCanvasPath(contours));
+        rasterContext.restore();
+
+        const imageData = rasterContext.getImageData(0, 0, width, height);
+        const pixels = new Uint8Array(width * height);
+
+        for (let index = 0; index < pixels.length; index += 1) {
+          pixels[index] = imageData.data[index * 4 + 3] > 20 ? 1 : 0;
+        }
+
+        return { pixels, width, height, scale };
+      }
+
+      function skeletonNeighborValues(pixels, width, x, y) {
+        const index = (nx, ny) => pixels[ny * width + nx] ? 1 : 0;
+        return [
+          index(x, y - 1),
+          index(x + 1, y - 1),
+          index(x + 1, y),
+          index(x + 1, y + 1),
+          index(x, y + 1),
+          index(x - 1, y + 1),
+          index(x - 1, y),
+          index(x - 1, y - 1),
+        ];
+      }
+
+      function countTransitions(neighbors) {
+        let transitions = 0;
+        for (let index = 0; index < neighbors.length; index += 1) {
+          if (neighbors[index] === 0 && neighbors[(index + 1) % neighbors.length] === 1) {
+            transitions += 1;
+          }
+        }
+        return transitions;
+      }
+
+      function thinSkeletonPixels(sourcePixels, width, height) {
+        const pixels = new Uint8Array(sourcePixels);
+        const maxIterations = 80;
+        let changed = true;
+        let iteration = 0;
+
+        while (changed && iteration < maxIterations) {
+          changed = false;
+
+          for (let pass = 0; pass < 2; pass += 1) {
+            const toRemove = [];
+
+            for (let y = 1; y < height - 1; y += 1) {
+              for (let x = 1; x < width - 1; x += 1) {
+                const pixelIndex = y * width + x;
+                if (!pixels[pixelIndex]) continue;
+
+                const neighbors = skeletonNeighborValues(pixels, width, x, y);
+                const neighborCount = neighbors.reduce((sum, value) => sum + value, 0);
+                const transitions = countTransitions(neighbors);
+                const [p2, p3, p4, p5, p6, p7, p8] = neighbors;
+                const passCondition =
+                  pass === 0
+                    ? p2 * p4 * p6 === 0 && p4 * p6 * p8 === 0
+                    : p2 * p4 * p8 === 0 && p2 * p6 * p8 === 0;
+
+                if (
+                  neighborCount >= 2 &&
+                  neighborCount <= 6 &&
+                  transitions === 1 &&
+                  passCondition
+                ) {
+                  toRemove.push(pixelIndex);
+                }
+              }
+            }
+
+            if (toRemove.length) {
+              changed = true;
+              toRemove.forEach((pixelIndex) => {
+                pixels[pixelIndex] = 0;
+              });
+            }
+          }
+
+          iteration += 1;
+        }
+
+        return pixels;
+      }
+
+      function getSkeletonNeighbors(pixels, width, height, x, y) {
+        const neighbors = [];
+
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+            if (pixels[ny * width + nx]) {
+              neighbors.push({ x: nx, y: ny });
+            }
+          }
+        }
+
+        return neighbors;
+      }
+
+      function traceSkeletonPixels(pixels, width, height, scale) {
+        const visitedEdges = new Set();
+        const key = (point) => `${point.x},${point.y}`;
+        const edgeKey = (a, b) => {
+          const left = key(a);
+          const right = key(b);
+          return left < right ? `${left}|${right}` : `${right}|${left}`;
+        };
+        const points = [];
+        const pointSet = new Set();
+
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            if (pixels[y * width + x]) {
+              const point = { x, y };
+              points.push(point);
+              pointSet.add(key(point));
+            }
+          }
+        }
+
+        const degreeOf = (point) => getSkeletonNeighbors(pixels, width, height, point.x, point.y).length;
+        const starts = points
+          .filter((point) => degreeOf(point) !== 2)
+          .sort((a, b) => a.x - b.x || a.y - b.y);
+        const allStarts = starts.length ? starts : points.sort((a, b) => a.x - b.x || a.y - b.y);
+        const traced = [];
+
+        function traceFrom(start, next) {
+          const stroke = [start];
+          let previous = start;
+          let current = next;
+          visitedEdges.add(edgeKey(start, next));
+
+          while (current) {
+            stroke.push(current);
+            const neighbors = getSkeletonNeighbors(pixels, width, height, current.x, current.y)
+              .filter((neighbor) => key(neighbor) !== key(previous))
+              .filter((neighbor) => !visitedEdges.has(edgeKey(current, neighbor)));
+
+            if (neighbors.length !== 1) {
+              break;
+            }
+
+            const following = neighbors[0];
+            visitedEdges.add(edgeKey(current, following));
+            previous = current;
+            current = following;
+          }
+
+          return stroke;
+        }
+
+        for (const start of allStarts) {
+          const neighbors = getSkeletonNeighbors(pixels, width, height, start.x, start.y)
+            .filter((neighbor) => !visitedEdges.has(edgeKey(start, neighbor)))
+            .sort((a, b) => a.x - b.x || a.y - b.y);
+
+          for (const neighbor of neighbors) {
+            const stroke = traceFrom(start, neighbor);
+            if (stroke.length > 2) {
+              traced.push(stroke);
+            }
+          }
+        }
+
+        return traced.map((stroke) =>
+          stroke.map((point) => ({
+            x: point.x / scale,
+            y: point.y / scale,
+          }))
+        );
+      }
+
+      function pointDistance(left, right) {
+        return Math.hypot(left.x - right.x, left.y - right.y);
+      }
+
+      function pointStrokeLength(stroke) {
+        let length = 0;
+        for (let index = 1; index < stroke.length; index += 1) {
+          length += pointDistance(stroke[index - 1], stroke[index]);
+        }
+        return length;
+      }
+
+      function pruneShortSkeletonStrokes(strokes) {
+        return strokes.filter((stroke) => stroke.length >= 4 && pointStrokeLength(stroke) >= 14);
+      }
+
+      function bridgeSkeletonStrokes(strokes) {
+        const maxBridgeDistance = 22;
+        const merged = strokes.map((stroke) => [...stroke]);
+        let changed = true;
+
+        while (changed) {
+          changed = false;
+
+          outer: for (let leftIndex = 0; leftIndex < merged.length; leftIndex += 1) {
+            const left = merged[leftIndex];
+            const leftStart = left[0];
+            const leftEnd = left[left.length - 1];
+
+            for (let rightIndex = leftIndex + 1; rightIndex < merged.length; rightIndex += 1) {
+              const right = merged[rightIndex];
+              const rightStart = right[0];
+              const rightEnd = right[right.length - 1];
+              const candidates = [
+                {
+                  distance: pointDistance(leftEnd, rightStart),
+                  stroke: [...left, ...right],
+                },
+                {
+                  distance: pointDistance(leftEnd, rightEnd),
+                  stroke: [...left, ...right.slice().reverse()],
+                },
+                {
+                  distance: pointDistance(leftStart, rightEnd),
+                  stroke: [...right, ...left],
+                },
+                {
+                  distance: pointDistance(leftStart, rightStart),
+                  stroke: [...right.slice().reverse(), ...left],
+                },
+              ].sort((a, b) => a.distance - b.distance);
+              const best = candidates[0];
+
+              if (best.distance <= maxBridgeDistance) {
+                merged[leftIndex] = best.stroke;
+                merged.splice(rightIndex, 1);
+                changed = true;
+                break outer;
+              }
+            }
+          }
+        }
+
+        return merged;
+      }
+
+      function simplifyPointStroke(stroke) {
+        const simplified = [];
+        let previous = null;
+        const step = 2;
+
+        stroke.forEach((point, index) => {
+          if (
+            index === 0 ||
+            index === stroke.length - 1 ||
+            !previous ||
+            Math.hypot(point.x - previous.x, point.y - previous.y) >= step
+          ) {
+            simplified.push(point);
+            previous = point;
+          }
+        });
+
+        return simplified;
+      }
+
+      function makeSkeletonPointStrokes(contours) {
+        const raster = rasterizeContours(contours);
+        const skeletonPixels = thinSkeletonPixels(raster.pixels, raster.width, raster.height);
+        const traced = traceSkeletonPixels(skeletonPixels, raster.width, raster.height, raster.scale)
+          .map(simplifyPointStroke);
+        return bridgeSkeletonStrokes(pruneShortSkeletonStrokes(traced))
+          .map(simplifyPointStroke)
+          .sort((left, right) => left[0].x - right[0].x || left[0].y - right[0].y)
+          .filter((stroke) => stroke.length > 2);
+      }
+
+      function wait(duration) {
+        return new Promise((resolve) => window.setTimeout(resolve, duration));
+      }
+
+      function normalizedToCanvas(point) {
+        return [(point[0] / CANVAS_SPACE) * elements.canvas.width, (point[1] / CANVAS_SPACE) * elements.canvas.height];
+      }
+
+      function extractMessageContent(responseJson) {
+        const content = responseJson?.choices?.[0]?.message?.content;
+
+        if (typeof content === "string") {
+          return content;
+        }
+
+        if (Array.isArray(content)) {
+          return content
+            .map((item) => {
+              if (typeof item === "string") return item;
+              if (typeof item?.text === "string") return item.text;
+              return "";
+            })
+            .join("");
+        }
+
+        throw new Error("LLM 响应缺少 choices[0].message.content。");
+      }
+
+      function parseJsonContent(content) {
+        const trimmed = content.trim();
+
+        try {
+          return JSON.parse(trimmed);
+        } catch {
+          const match = trimmed.match(/\{[\s\S]*\}/);
+          if (!match) {
+            throw new Error("LLM 返回内容不是可解析 JSON。");
+          }
+          return JSON.parse(match[0]);
+        }
+      }
+
+      function compactStrokesForLlm(strokes) {
+        return strokes.map((stroke) => {
+          if (stroke.length <= 28) return stroke;
+          const compacted = [];
+          const step = (stroke.length - 1) / 27;
+          for (let index = 0; index < 28; index += 1) {
+            compacted.push(stroke[Math.round(index * step)]);
+          }
+          return compacted;
+        });
+      }
+
+      function buildLlmOptimizePrompt(name, strokes, mode) {
+        const compacted = compactStrokesForLlm(strokes);
+        const strokeCount = strokes.length;
+        const minStrokeCount = Math.max(6, Math.floor(strokeCount * 0.55));
+        const maxStrokeCount = Math.max(minStrokeCount + 2, Math.ceil(strokeCount * 1.1));
+        const sharedRules = [
+          "/no_think",
+          `请根据现有笔迹，为中文姓名「${name}」优化签名轨迹。`,
+          "",
+          "输入 strokes 来自字体轮廓骨架化，能提供姓名结构和空间位置。你的输出必须仍然像这个姓名，不能变成抽象符号、波浪线、几何图案或装饰线。",
+          "",
+          "硬性约束：",
+          `1. 输出 stroke 数量必须在 ${minStrokeCount} 到 ${maxStrokeCount} 条之间。`,
+          "2. 坐标必须保持在 0 到 1000 的归一化画布内。",
+          "3. 整体位置、宽高和原始 strokes 大致一致，不要跨越整个画布，不要生成超长斜线。",
+          "4. 每条 stroke 最多 32 个点，至少 2 个点。",
+          "5. 禁止输出重复绕圈、正弦波、大弧线、随机涂鸦。",
+          "6. 必须保留每个字的关键结构，让人能辨认姓名。",
+          "",
+        ];
+        const modeRules =
+          mode === "bold"
+            ? [
+                "优化风格：大胆重构。",
+                "你是一位中文书法大师和艺术签名设计师，可以适度合并笔画、连接断笔、压扁字形、拉长收笔、加入自然连笔。",
+                "但是大胆不等于抽象，必须严格遵守硬性约束，不能丢失姓名结构。",
+              ]
+            : [
+                "优化风格：稳健修正。",
+                "你主要做清理和连笔：合并近距离断笔、删除短毛刺、平滑生硬折点、调整少量顺序。",
+                "不要大幅改变原始字形，不要重画，不要删掉主要笔画。",
+              ];
+
+        return [
+          ...sharedRules,
+          ...modeRules,
+          "",
+          '只返回严格 JSON：{"strokes":[[[x,y],...],...]}',
+          "不要 markdown，不要解释，不要思考过程，不要输出除 JSON 以外的任何内容。",
+          "",
+          "原始 strokes：",
+          JSON.stringify({ strokes: compacted }),
+        ].join("\n");
+      }
+
+      async function optimizeCurrentStrokesWithLlm() {
+        const name = elements.nameInput.value.trim();
+        const baseUrl = elements.llmBaseUrlInput.value.trim().replace(/\/$/, "");
+        const model = elements.llmModelInput.value.trim();
+        const apiKey = elements.llmApiKeyInput.value.trim();
+        const llmMode = elements.llmModeInput.value;
+
+        if (!latestStrokes?.length) throw new Error("请先生成骨架 strokes。");
+        if (
+          latestStrokeSource !== "skeleton" &&
+          latestStrokeSource !== "outlineSkeleton" &&
+          latestStrokeSource !== "solidSkeleton" &&
+          latestStrokeSource !== "llm"
+        ) {
+          throw new Error("请先选择“骨架 strokes”或“轮廓 + 骨架”并生成预览。");
+        }
+        if (!baseUrl) throw new Error("请填写 LLM Base URL。");
+        if (!model) throw new Error("请填写 LLM Model。");
+        if (!apiKey) throw new Error("请填写 LLM API Key。");
+
+        const originalStrokes = latestStrokes;
+        const prompt = buildLlmOptimizePrompt(name, originalStrokes, llmMode);
+        const response = await fetch(LLM_PROXY_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            baseUrl,
+            apiKey,
+            requestBody: {
+              model,
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "你是中文书法大师和艺术签名设计师。你擅长把生硬的字体骨架轨迹改造成自然、流畅、可辨认的中文签名。你只输出严格 JSON，不输出解释、markdown 或思考过程。",
+                },
+                { role: "user", content: prompt },
+              ],
+              temperature: llmMode === "bold" ? 0.62 : 0.28,
+              top_p: llmMode === "bold" ? 0.82 : 0.65,
+              enable_thinking: false,
+              response_format: { type: "json_object" },
+            },
+          }),
+        });
+        const responseText = await response.text();
+        let responseJson;
+
+        try {
+          responseJson = JSON.parse(responseText);
+        } catch {
+          throw new Error("LLM 代理返回非 JSON：" + responseText.slice(0, 500));
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            "LLM 请求失败：" +
+              response.status +
+              " " +
+              (responseJson?.error?.message || responseJson?.message || response.statusText)
+          );
+        }
+
+        const parsed = validateNormalizedStrokes(parseJsonContent(extractMessageContent(responseJson)));
+        validateLlmResultQuality(originalStrokes, parsed.strokes);
+        latestStrokes = parsed.strokes;
+        latestStrokeWidth = 5;
+        latestStrokeSource = "llm";
+        elements.strokesOutput.textContent = JSON.stringify(
+          {
+            mode: "llmOptimized",
+            llmMode,
+            source: "skeleton",
+            strokeCount: latestStrokes.length,
+            strokes: latestStrokes,
+          },
+          null,
+          2
+        );
+
+        await drawStrokes(latestStrokes, false, latestStrokeWidth);
+        setStatus(`LLM 优化完成：${latestStrokes.length} 条 stroke。`, "ok");
+      }
+
+      async function drawStrokes(strokes, preserveCanvas = false, lineWidth = 4) {
+        const drawToken = ++activeDrawToken;
+        if (!preserveCanvas) {
+          clearCanvas();
+          activeDrawToken = drawToken;
+        }
+
+        context.save();
+        context.strokeStyle = "#111827";
+        context.lineWidth = lineWidth;
+        context.lineCap = "round";
+        context.lineJoin = "round";
+
+        for (const stroke of strokes) {
+          if (drawToken !== activeDrawToken) break;
+          const first = normalizedToCanvas(stroke[0]);
+          context.beginPath();
+          context.moveTo(first[0], first[1]);
+
+          for (const point of stroke.slice(1)) {
+            if (drawToken !== activeDrawToken) break;
+            const mapped = normalizedToCanvas(point);
+            context.lineTo(mapped[0], mapped[1]);
+            context.stroke();
+            await wait(DRAW_DELAY_MS);
+          }
+        }
+
+        context.restore();
+      }
+
+      async function renderSignature() {
+        if (!loadedFont) {
+          throw new Error("请先上传字体文件。");
+        }
+
+        const name = elements.nameInput.value.trim();
+        if (!name) {
+          throw new Error("请填写签名姓名。");
+        }
+
+        const fontSize = Number(elements.fontSizeInput.value);
+        const samplesPerCurve = Number(elements.sampleInput.value);
+        const path = loadedFont.getPath(name, 0, fontSize, fontSize);
+        const rawContours = pathToContours(path, samplesPerCurve);
+
+        if (!rawContours.length) {
+          throw new Error("没有从字体中解析到 path 轮廓。");
+        }
+
+        const contours = transformContours(rawContours);
+        const outlineStrokes = contoursToNormalizedStrokes(contours);
+        const skeletonPointStrokes = makeSkeletonPointStrokes(contours);
+        const skeletonStrokes = pointsToNormalizedStrokes(skeletonPointStrokes);
+        const fillPointStrokes = makeFillPointStrokes(contours);
+        const fillStrokes = pointsToNormalizedStrokes(fillPointStrokes);
+        const mode = elements.modeInput.value;
+        latestSolidDataUrl = renderSolidDataUrl(contours);
+        const strokes =
+          mode === "solid"
+            ? []
+            : mode === "fill" || mode === "outlineFill"
+            ? fillStrokes
+            : mode === "skeleton" || mode === "outlineSkeleton" || mode === "solidSkeleton"
+              ? skeletonStrokes
+              : outlineStrokes;
+        latestStrokes = strokes;
+        latestStrokeWidth =
+          mode === "solid"
+            ? 0
+            : mode === "fill" || mode === "outlineFill"
+            ? 9
+            : mode === "skeleton" || mode === "outlineSkeleton" || mode === "solidSkeleton"
+              ? 5
+              : 4;
+        latestStrokeSource = mode;
+        elements.redrawButton.disabled = mode === "solid";
+        elements.exportSolidButton.disabled = false;
+        elements.copyInjectButton.disabled = false;
+        elements.llmOptimizeButton.disabled = !(
+          mode === "skeleton" ||
+          mode === "outlineSkeleton" ||
+          mode === "solidSkeleton"
+        );
+        elements.pathOutput.textContent = path.toPathData(2);
+        elements.strokesOutput.textContent = JSON.stringify(
+          {
+            mode,
+            outlineStrokeCount: outlineStrokes.length,
+            skeletonStrokeCount: skeletonStrokes.length,
+            fillStrokeCount: fillStrokes.length,
+            note:
+              mode === "solid"
+                ? "实心 path 模式不导出触摸 strokes，适合验证直接绘制到签字 canvas 的方案。"
+                : undefined,
+            strokes,
+          },
+          null,
+          2
+        );
+        elements.solidOutput.textContent = JSON.stringify(
+          {
+            dataUrl: latestSolidDataUrl,
+            injectScript: buildCanvasInjectScript(latestSolidDataUrl),
+          },
+          null,
+          2
+        );
+
+        clearCanvas();
+        if (mode === "solid" || mode === "solidSkeleton") {
+          drawSolidPath(contours);
+        }
+        if (
+          mode === "outline" ||
+          mode === "both" ||
+          mode === "outlineFill" ||
+          mode === "outlineSkeleton"
+        ) {
+          drawOutline(contours);
+        }
+        if (mode === "strokes" || mode === "both") {
+          await drawStrokes(outlineStrokes, mode === "both", 4);
+        }
+        if (mode === "skeleton" || mode === "outlineSkeleton") {
+          await drawStrokes(skeletonStrokes, mode === "outlineSkeleton", 5);
+        }
+        if (mode === "solidSkeleton") {
+          await drawStrokes(skeletonStrokes, true, 4);
+        }
+        if (mode === "fill" || mode === "outlineFill") {
+          await drawStrokes(fillStrokes, mode === "outlineFill", 9);
+        }
+
+        setStatus(
+          `已生成：${outlineStrokes.length} 条轮廓 stroke，${skeletonStrokes.length} 条骨架 stroke，${fillStrokes.length} 条填充 stroke。`,
+          "ok"
+        );
+      }
+
+      async function loadFont(file) {
+        const buffer = await file.arrayBuffer();
+        loadedFont = opentype.parse(buffer);
+        setStatus(`字体已加载：${loadedFont.names.fullName?.zh || loadedFont.names.fullName?.en || file.name}`, "ok");
+        await renderSignature();
+      }
+
+      elements.fontInput.addEventListener("change", async () => {
+        const file = elements.fontInput.files?.[0];
+        if (!file) return;
+
+        try {
+          await loadFont(file);
+        } catch (error) {
+          setStatus(error?.message || "字体加载失败。", "error");
+        }
+      });
+
+      document.querySelectorAll("[data-name]").forEach((button) => {
+        button.addEventListener("click", () => {
+          elements.nameInput.value = button.dataset.name;
+          rerenderIfReady();
+        });
+      });
+
+      syncRange(elements.fontSizeInput, elements.fontSizeValue);
+      syncRange(elements.scaleXInput, elements.scaleXValue);
+      syncRange(elements.slantInput, elements.slantValue);
+      syncRange(elements.sampleInput, elements.sampleValue);
+      syncRange(elements.jitterInput, elements.jitterValue);
+
+      elements.nameInput.addEventListener("input", () => {
+        rerenderIfReady();
+      });
+      elements.modeInput.addEventListener("change", () => {
+        rerenderIfReady();
+      });
+      elements.renderButton.addEventListener("click", () => {
+        renderSignature().catch((error) => showError(error, "生成失败。"));
+      });
+      elements.llmOptimizeButton.addEventListener("click", async () => {
+        elements.llmOptimizeButton.disabled = true;
+        setStatus("正在请求 LLM 优化当前 strokes...", "");
+
+        try {
+          await optimizeCurrentStrokesWithLlm();
+        } catch (error) {
+          showError(error, "LLM 优化失败。");
+        } finally {
+          elements.llmOptimizeButton.disabled = !latestStrokes?.length;
+        }
+      });
+      elements.redrawButton.addEventListener("click", () => {
+        if (latestStrokes) {
+          drawStrokes(latestStrokes, false, latestStrokeWidth);
+        }
+      });
+      elements.exportSolidButton.addEventListener("click", () => {
+        if (!latestSolidDataUrl) {
+          showError(new Error("请先生成实心 path 预览。"));
+          return;
+        }
+
+        elements.solidOutput.textContent = latestSolidDataUrl;
+        setStatus("实心 PNG dataURL 已输出。", "ok");
+      });
+      elements.copyInjectButton.addEventListener("click", async () => {
+        if (!latestSolidDataUrl) {
+          showError(new Error("请先生成实心 path 预览。"));
+          return;
+        }
+
+        const script = buildCanvasInjectScript(latestSolidDataUrl);
+        elements.solidOutput.textContent = script;
+
+        try {
+          await navigator.clipboard.writeText(script);
+          setStatus("注入脚本已复制到剪贴板。", "ok");
+        } catch {
+          setStatus("注入脚本已输出，请手动复制。", "ok");
+        }
+      });
+      elements.clearButton.addEventListener("click", () => {
+        clearCanvas();
+        latestStrokes = null;
+        latestStrokeSource = "none";
+        latestSolidDataUrl = "";
+        elements.redrawButton.disabled = true;
+        elements.exportSolidButton.disabled = true;
+        elements.copyInjectButton.disabled = true;
+        elements.llmOptimizeButton.disabled = true;
+        elements.solidOutput.textContent = "尚未导出。";
+        setStatus("画布已清空。", "");
+      });
+
+      clearCanvas();
+      if (!window.opentype) {
+        setStatus("opentype.js 未加载，请检查网络或 CDN。", "error");
+      }
+    </script>
+  </body>
+</html>
