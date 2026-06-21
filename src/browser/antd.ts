@@ -11,6 +11,9 @@ import {
   wait,
 } from "@/src/browser/dom";
 
+type DropdownSelectMode = "single" | "multiple";
+type DropdownOptionInput = string | string[];
+
 // 根据文本查找当前可见的按钮，兼容 Ant Design 按钮中间出现空格。
 export function findVisibleButton(
   buttonText: string,
@@ -219,28 +222,50 @@ async function switchDropdownGroupAndFindOption(
   return false;
 }
 
-// 根据表单 label 打开下拉框，并选择目标选项。
-export async function selectDropdownByLabel(
-  labelText: string,
-  optionText: string,
-  options: {
-    skipWhenContains?: string;
-    tryGroupText?: string;
-    scope?: QueryScope;
-  } = {}
-): Promise<void> {
-  const $formItem = findFormItem(labelText, options.scope);
-  const currentText = getElementText($formItem);
+// 将单个选项和多个选项统一整理成数组，方便后续按顺序处理。
+function normalizeDropdownOptions(optionText: DropdownOptionInput): string[] {
+  return Array.isArray(optionText) ? optionText : [optionText];
+}
 
-  // 如果多选框已经带入目标内容，就不重复选择。
-  if (
-    options.skipWhenContains &&
-    currentText.includes(normalizeText(options.skipWhenContains))
-  ) {
-    console.log(`表单项【${labelText}】已包含【${options.skipWhenContains}】，跳过选择`);
-    return;
+// 判断当前表单项是否已经包含指定的选项文本。
+function formItemContainsOption(currentText: string, optionText: string): boolean {
+  return currentText.includes(normalizeText(optionText));
+}
+
+// 根据选择模式判断是否可以跳过当前下拉选择。
+function shouldSkipDropdownSelection(
+  currentText: string,
+  skipOptions: string[],
+  selectMode: DropdownSelectMode
+): boolean {
+  // 如果没有配置跳过条件，就继续执行选择流程。
+  if (!skipOptions.length) return false;
+
+  // 单选模式只要命中任意一个候选值，就认为页面已有有效默认值。
+  if (selectMode === "single") {
+    return skipOptions.some((option) => formItemContainsOption(currentText, option));
   }
 
+  // 多选模式需要全部候选值都已存在，才跳过后续补选。
+  return skipOptions.every((option) => formItemContainsOption(currentText, option));
+}
+
+// 根据选择模式生成更清晰的跳过日志。
+function getSkipMessage(
+  labelText: string,
+  skipOptions: string[],
+  selectMode: DropdownSelectMode
+): string {
+  const joinedOptions = skipOptions.join("、");
+  const modeText = selectMode === "single" ? "任意包含" : "全部包含";
+  return `表单项【${labelText}】已${modeText}【${joinedOptions}】，跳过选择`;
+}
+
+// 打开指定表单项的下拉面板，并尽量触发 Ant Design 渲染候选项。
+async function openDropdownFromFormItem(
+  labelText: string,
+  $formItem: JQuery<HTMLElement>
+): Promise<void> {
   // 先滚动到中部，减少下拉面板不可点击的问题。
   scrollElementToCenter($formItem[0]);
   await wait(300);
@@ -263,16 +288,85 @@ export async function selectDropdownByLabel(
     dispatchInputEvents(input);
     await wait(300);
   }
+}
 
-  // 依次尝试直接点击、切换分组、滚动虚拟列表。
-  const selected =
+// 按照已有的直接点击、分组切换和虚拟滚动策略尝试选择一个候选项。
+async function trySelectDropdownOption(
+  optionText: string,
+  tryGroupText?: string
+): Promise<boolean> {
+  return (
     (await clickDropdownOption(optionText)) ||
-    (options.tryGroupText
-      ? await switchDropdownGroupAndFindOption(options.tryGroupText, optionText)
+    (tryGroupText
+      ? await switchDropdownGroupAndFindOption(tryGroupText, optionText)
       : false) ||
-    (await scrollDropdownToFindOption(optionText));
+    (await scrollDropdownToFindOption(optionText))
+  );
+}
 
-  if (!selected) {
-    throw new Error(`表单项【${labelText}】没有找到选项【${optionText}】`);
+// 根据表单 label 打开下拉框，并选择目标选项。
+export async function selectDropdownByLabel(
+  labelText: string,
+  optionText: DropdownOptionInput,
+  options: {
+    skipWhenContains?: DropdownOptionInput;
+    selectMode?: DropdownSelectMode;
+    tryGroupText?: string;
+    scope?: QueryScope;
+  } = {}
+): Promise<void> {
+  const $formItem = findFormItem(labelText, options.scope);
+  const currentText = getElementText($formItem);
+  const optionTexts = normalizeDropdownOptions(optionText);
+  const skipOptions = options.skipWhenContains
+    ? normalizeDropdownOptions(options.skipWhenContains)
+    : [];
+  const selectMode = options.selectMode || "single";
+
+  // 如果表单项已经带入目标内容，就不重复选择。
+  if (shouldSkipDropdownSelection(currentText, skipOptions, selectMode)) {
+    console.log(getSkipMessage(labelText, skipOptions, selectMode));
+    return;
+  }
+
+  // 先打开下拉框，后续选择逻辑复用同一个可见弹层。
+  await openDropdownFromFormItem(labelText, $formItem);
+
+  // 单选模式按配置顺序匹配第一个可用候选项。
+  if (selectMode === "single") {
+    for (const candidate of optionTexts) {
+      if (await trySelectDropdownOption(candidate, options.tryGroupText)) {
+        return;
+      }
+    }
+
+    throw new Error(`表单项【${labelText}】没有找到任一选项【${optionTexts.join("、")}】`);
+  }
+
+  // 多选模式只补选当前表单项中尚未包含的候选项。
+  let selectedCount = 0;
+  for (const candidate of optionTexts) {
+    if (formItemContainsOption(currentText, candidate)) {
+      continue;
+    }
+
+    // 多选下拉通常不会关闭；如果页面组件主动关闭，则重新打开后再尝试当前候选项。
+    let selected = false;
+    try {
+      selected = await trySelectDropdownOption(candidate, options.tryGroupText);
+    } catch {
+      await openDropdownFromFormItem(labelText, $formItem);
+      selected = await trySelectDropdownOption(candidate, options.tryGroupText);
+    }
+
+    // 记录本轮实际补选成功的数量，后续用于判断配置是否完全无效。
+    if (selected) {
+      selectedCount += 1;
+    }
+  }
+
+  // 多选模式至少需要成功补选一个选项，避免静默吞掉配置错误。
+  if (!selectedCount) {
+    throw new Error(`表单项【${labelText}】没有找到可选择的选项【${optionTexts.join("、")}】`);
   }
 }

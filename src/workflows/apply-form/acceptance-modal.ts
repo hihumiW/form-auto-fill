@@ -32,9 +32,10 @@ export async function fillAcceptanceModal(): Promise<void> {
     tryGroupText: "02",
   });
 
-  // 第四步确认调解员；如果系统已带入曾傅铭，则直接跳过。
+  // 第四步确认调解员；单选模式下如果系统已带入任一候选调解员，则直接跳过。
   await selectDropdownByLabel("调解员", APPLY_FORM_CONFIG.mediator, {
     skipWhenContains: APPLY_FORM_CONFIG.mediator,
+    selectMode: APPLY_FORM_CONFIG.mediatorSelectMode,
   });
 
   // 第五步只校验系统自动带入的必填文本，不覆盖页面已有内容。
