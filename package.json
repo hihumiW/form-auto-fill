@@ -18,8 +18,10 @@
     "@types/jquery": "^3.5.33",
     "jquery": "^3.7.1",
     "jsqr": "^1.4.0",
+    "opentype.js": "^2.0.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "sm-crypto": "^0.4.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.12",

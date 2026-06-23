@@ -270,7 +270,7 @@
               <option value="outline">轮廓 path</option>
               <option value="strokes">采样 strokes</option>
               <option value="skeleton">骨架 strokes</option>
-              <option value="fill">填充 strokes</option>
+              <option value="fill-strokes">填充 strokes</option>
               <option value="both" selected>轮廓 + strokes</option>
               <option value="solidSkeleton">实心 + 骨架</option>
               <option value="outlineSkeleton">轮廓 + 骨架</option>
@@ -313,8 +313,8 @@
           <label>
             字迹扰动
             <div class="range-grid">
-              <input id="jitterInput" type="range" min="0" max="18" value="3" />
-              <input id="jitterValue" type="number" min="0" max="18" value="3" />
+              <input id="jitterInput" type="range" min="0" max="18" value="1" />
+              <input id="jitterValue" type="number" min="0" max="18" value="1" />
             </div>
           </label>
 
@@ -766,6 +766,16 @@
         exportContext.fillStyle = "#111827";
         exportContext.fill(makeCanvasPath(contours));
         return exportCanvas.toDataURL("image/png");
+      }
+
+      // 判断当前模式是否使用填充轨迹，兼容旧版 demo 中的 fill 值。
+      function isFillStrokesMode(mode) {
+        return mode === "fill-strokes" || mode === "fill" || mode === "outlineFill";
+      }
+
+      // 判断当前模式是否使用骨架轨迹，便于渲染和导出逻辑保持一致。
+      function isSkeletonStrokesMode(mode) {
+        return mode === "skeleton" || mode === "outlineSkeleton" || mode === "solidSkeleton";
       }
 
       function buildCanvasInjectScript(dataUrl) {
@@ -1413,21 +1423,23 @@
         const fillStrokes = pointsToNormalizedStrokes(fillPointStrokes);
         const mode = elements.modeInput.value;
         latestSolidDataUrl = renderSolidDataUrl(contours);
+        // 根据预览模式选择当前导出的触摸轨迹。
         const strokes =
           mode === "solid"
             ? []
-            : mode === "fill" || mode === "outlineFill"
+            : isFillStrokesMode(mode)
             ? fillStrokes
-            : mode === "skeleton" || mode === "outlineSkeleton" || mode === "solidSkeleton"
+            : isSkeletonStrokesMode(mode)
               ? skeletonStrokes
               : outlineStrokes;
         latestStrokes = strokes;
+        // 根据轨迹类型设置预览笔宽，填充轨迹需要更粗才接近实心签名。
         latestStrokeWidth =
           mode === "solid"
             ? 0
-            : mode === "fill" || mode === "outlineFill"
+            : isFillStrokesMode(mode)
             ? 9
-            : mode === "skeleton" || mode === "outlineSkeleton" || mode === "solidSkeleton"
+            : isSkeletonStrokesMode(mode)
               ? 5
               : 4;
         latestStrokeSource = mode;
@@ -1449,6 +1461,8 @@
             note:
               mode === "solid"
                 ? "实心 path 模式不导出触摸 strokes，适合验证直接绘制到签字 canvas 的方案。"
+                : isFillStrokesMode(mode)
+                ? "fill-strokes 模式会把字形实心区域转换成多条可触摸回放的填充轨迹。"
                 : undefined,
             strokes,
           },
@@ -1485,7 +1499,7 @@
         if (mode === "solidSkeleton") {
           await drawStrokes(skeletonStrokes, true, 4);
         }
-        if (mode === "fill" || mode === "outlineFill") {
+        if (isFillStrokesMode(mode)) {
           await drawStrokes(fillStrokes, mode === "outlineFill", 9);
         }
 

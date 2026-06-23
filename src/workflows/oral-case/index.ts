@@ -32,6 +32,7 @@ async function ensureProtocolRegisterForm(
 
 async function processOneOralCase(
   caseNumber: string,
+  signatureNames: string[],
   context: AutomationContext
 ): Promise<void> {
   context.log(`开始处理口头案件：${caseNumber}`);
@@ -44,7 +45,7 @@ async function processOneOralCase(
 
   await ensureProtocolRegisterForm(caseNumber, context);
 
-  await runSignatureFlow();
+  await runSignatureFlow(signatureNames);
   context.log(`口头案件签字完成：${caseNumber}`);
 
   await runSealFlow();
@@ -63,9 +64,9 @@ export const oralCaseWorkflow: Workflow = {
     let count = 0;
 
     while (context.shouldContinue()) {
-      const caseNumber = await openFirstOralCase();
+      const { caseNumber, signatureNames } = await openFirstOralCase();
       await wait(300);
-      await processOneOralCase(caseNumber, context);
+      await processOneOralCase(caseNumber, signatureNames, context);
 
       count += 1;
       context.log(`口头案件处理完成：${caseNumber}`);

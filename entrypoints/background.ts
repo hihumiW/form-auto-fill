@@ -1,8 +1,11 @@
 import type {
+  AutoSignatureMode,
   OpenMobileSignPagePayload,
   RequestAction,
   ResponseResult,
+  SignatureFontConfig,
   SignatureMode,
+  SkeletonSignatureConfig,
 } from "@/types";
 
 const MOBILE_USER_AGENT =
@@ -125,12 +128,29 @@ async function setupMobileEnvironment(debuggee: Debuggee): Promise<void> {
 
 async function executeMobileSignScript(
   tabId: number,
-  signatureMode: SignatureMode
+  signatureMode: SignatureMode,
+  signatureNames: string[],
+  signatureFonts: SignatureFontConfig[],
+  skeletonConfig: SkeletonSignatureConfig,
+  autoSignatureMode: AutoSignatureMode
 ): Promise<void> {
+  if (signatureMode === "auto") {
+    await browser.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ["opentype.min.js"],
+    });
+  }
+
   const results = await browser.scripting.executeScript({
     target: { tabId, allFrames: true },
     func: mobileSignAutomation,
-    args: [signatureMode],
+    args: [
+      signatureMode,
+      signatureNames,
+      signatureFonts,
+      skeletonConfig,
+      autoSignatureMode,
+    ],
   });
 
   const values = results.map((result) => result?.result) as Array<
@@ -174,7 +194,26 @@ async function openMobileSignPage(
     await setupMobileEnvironment(debuggee);
     await browser.tabs.update(tab.id, { url: payload.url });
     await waitForTabComplete(tab.id);
-    await executeMobileSignScript(tab.id, payload.signatureMode || "auto");
+    const signatureFonts = (payload.signatureFonts || []).map((font) => ({
+      ...font,
+      path: /^https?:\/\//.test(font.path)
+        ? font.path
+        : browser.runtime.getURL(font.path.replace(/^\/+/, "") as any),
+    }));
+    await executeMobileSignScript(
+      tab.id,
+      payload.signatureMode || "auto",
+      payload.signatureNames || [],
+      signatureFonts,
+      payload.skeletonConfig || {
+        fontSize: 240,
+        scaleX: 84,
+        slant: 17,
+        sampleDensity: 8,
+        jitter: 1,
+      },
+      payload.autoSignatureMode || "skeleton-strokes"
+    );
     await browser.tabs.remove(tab.id);
     return { success: true, data: null };
   } finally {
@@ -211,14 +250,40 @@ export default defineBackground(() => {
 });
 
 function mobileSignAutomation(
-  signatureMode: "manual" | "auto" = "auto"
+  signatureMode: "manual" | "auto" = "auto",
+  signatureNames: string[] = [],
+  signatureFonts: Array<{ name: string; path: string }> = [],
+  skeletonConfig: {
+    fontSize: number;
+    scaleX: number;
+    slant: number;
+    sampleDensity: number;
+    jitter: number;
+  } = {
+    fontSize: 240,
+    scaleX: 84,
+    slant: 17,
+    sampleDensity: 8,
+    jitter: 1,
+  },
+  autoSignatureMode: "skeleton-strokes" = "skeleton-strokes"
 ): Promise<
   MobileSignScriptResult
 > {
   type Point = [number, number];
+  type ShapePoint = { x: number; y: number };
   type Stroke = Point[];
   type StrokeEventType = "start" | "move" | "end";
   type EventWindow = Window & typeof globalThis;
+  type OpenTypeFont = {
+    charToGlyph(char: string): { index?: number };
+    getPath(text: string, x: number, y: number, fontSize: number): {
+      commands: Array<Record<string, number | string>>;
+    };
+  };
+  type OpenTypeApi = {
+    parse(buffer: ArrayBuffer): OpenTypeFont;
+  };
 
   const SELECTORS = {
     positionButton: ".ax-pdf-overlay-position-btn",
@@ -226,6 +291,8 @@ function mobileSignAutomation(
     focusedSignature: ".overlay-elem.required.overlay-elem-img.focus",
     signatureEntry:
       ".overlay-elem.required.overlay-elem-img, .img-sign-wrapper, [class*='img-sign'], [class*='sign-wrapper'], [class*='signWrapper'], .element-wrapper",
+    signatureBoard:
+      ".ax-sign-free-svg, .ax-sign-svg, .ax-writing-board-content .view, .ax-writing-board-content",
     signatureContainer:
       ".van-popup, .van-dialog, .signature, .sign, [class*='sign'], [class*='Signature']",
     clickable: "button, .van-button, [role='button'], a, div, span",
@@ -244,13 +311,13 @@ function mobileSignAutomation(
     manualSuccessTimeout: 10 * 60 * 1000,
     submitButtonTimeout: 15000,
     submitSettleDelay: 5000,
-    initialDelay: 1500,
+    initialDelay: 3000,
   };
   const STROKE_LIMITS = {
-    pressureMin: 0.08,
-    pressureMax: 0.22,
-    moveDelayMin: 10,
-    moveDelayMax: 25,
+    pressureMin: 0.01,
+    pressureMax: 0.05,
+    moveDelayMin: 3,
+    moveDelayMax: 8,
   };
 
   const wait = (duration: number) =>
@@ -273,7 +340,6 @@ function mobileSignAutomation(
             documents.push(frameDocument);
           }
         } catch {
-          // Cross-origin frames cannot be inspected from the top document.
         }
       }
     }
@@ -447,7 +513,39 @@ function mobileSignAutomation(
     element.click();
   };
 
+  const findSignatureBoardTarget = (): HTMLElement | undefined => {
+    // 第一步：优先选择 SDK 真正接收笔迹事件的 SVG 节点。
+    const boardCandidates = queryAll<HTMLElement>(SELECTORS.signatureBoard)
+      .filter(isVisible)
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const className = element.className.toString();
+        const isSvgBoard =
+          className.includes("ax-sign-free-svg") || className.includes("ax-sign-svg");
+
+        return {
+          element,
+          rect,
+          priority: isSvgBoard ? 0 : 1,
+        };
+      })
+      .filter(({ rect }) => rect.width >= 20 && rect.height >= 20)
+      .sort((left, right) => {
+        // 第二步：同等优先级下选择面积更大的可见签字板，避免选到内部碎片节点。
+        const leftArea = left.rect.width * left.rect.height;
+        const rightArea = right.rect.width * right.rect.height;
+        return left.priority - right.priority || rightArea - leftArea;
+      });
+
+    return boardCandidates[0]?.element;
+  };
+
   const topSignTarget = (): HTMLElement => {
+    // 第一步：如果页面已打开 SDK 签字板，直接使用真实签字板作为坐标参照。
+    const board = findSignatureBoardTarget();
+    if (board) return board;
+
+    // 第二步：找不到 SDK 签字板时，保留旧的宽泛容器作为兜底。
     const dialog = queryAll<HTMLElement>(SELECTORS.signatureContainer)
       .filter(isVisible)
       .sort((left, right) => {
@@ -478,29 +576,6 @@ function mobileSignAutomation(
     ];
   };
 
-  const makeTouch = (
-    target: EventTarget,
-    identifier: number,
-    x: number,
-    y: number,
-    force: number
-  ): Touch | undefined => {
-    try {
-      return new Touch({
-        identifier,
-        target,
-        clientX: x,
-        clientY: y,
-        radiusX: 1,
-        radiusY: 1,
-        rotationAngle: 0,
-        force,
-      });
-    } catch {
-      return undefined;
-    }
-  };
-
   const dispatchStrokeEvent = (
     type: StrokeEventType,
     target: HTMLElement,
@@ -511,130 +586,624 @@ function mobileSignAutomation(
   ): void => {
     const targetDocument = target.ownerDocument;
     const targetWindow = (targetDocument.defaultView || window) as EventWindow;
-    const eventTarget = targetDocument.elementFromPoint(x, y) || target;
     const pointerType =
       type === "start" ? "pointerdown" : type === "move" ? "pointermove" : "pointerup";
     const mouseType =
       type === "start" ? "mousedown" : type === "move" ? "mousemove" : "mouseup";
 
-    eventTarget.dispatchEvent(
-      new targetWindow.PointerEvent(pointerType, {
-        bubbles: true,
-        cancelable: true,
-        clientX: x,
-        clientY: y,
-        width: 1,
-        height: 1,
-        pointerId,
-        pointerType: "touch",
-        isPrimary: true,
-        pressure: type === "end" ? 0 : force,
-      })
-    );
-
-    const touch = makeTouch(eventTarget, pointerId, x, y, force);
-    if (touch) {
-      const touchEventType =
-        type === "start" ? "touchstart" : type === "move" ? "touchmove" : "touchend";
-      eventTarget.dispatchEvent(
-        new TouchEvent(touchEventType, {
+    // 第一步：签字 SDK 会用事件目标 SVG 的 CTM/边界计算坐标，因此事件必须直接派发给真实签字板。
+    if (typeof targetWindow.PointerEvent === "function") {
+      target.dispatchEvent(
+        new targetWindow.PointerEvent(pointerType, {
           bubbles: true,
           cancelable: true,
-          touches: type === "end" ? [] : [touch],
-          targetTouches: type === "end" ? [] : [touch],
-          changedTouches: [touch],
+          clientX: x,
+          clientY: y,
+          width: 0.2,
+          height: 0.2,
+          button: 0,
+          buttons: type === "end" ? 0 : 1,
+          pointerId,
+          pointerType: "pen",
+          isPrimary: true,
+          pressure: type === "end" ? 0 : force,
         })
       );
+      return;
     }
 
-    eventTarget.dispatchEvent(
+    // 第二步：极少数环境没有 PointerEvent 时，退回到鼠标事件，避免完全无法签字。
+    target.dispatchEvent(
       new targetWindow.MouseEvent(mouseType, {
         bubbles: true,
         cancelable: true,
         clientX: x,
         clientY: y,
+        button: 0,
+        buttons: type === "end" ? 0 : 1,
       })
     );
   };
 
-  const createSignatureStrokes = (target: HTMLElement): Stroke[] => {
-    const rect = target.getBoundingClientRect();
-    const fallbackWidth = Math.min(window.innerWidth * 0.78, 360);
-    const fallbackHeight = Math.min(window.innerHeight * 0.32, 180);
-    const left = rect.width > 80 ? rect.left : (window.innerWidth - fallbackWidth) / 2;
-    const top = rect.height > 80 ? rect.top : window.innerHeight * 0.34;
-    const width = rect.width > 80 ? rect.width : fallbackWidth;
-    const height = rect.height > 80 ? rect.height : fallbackHeight;
-    const paddingX = width * randomBetween(0.14, 0.22);
-    const paddingY = height * randomBetween(0.28, 0.38);
-    const minX = left + paddingX;
-    const maxX = left + width - paddingX;
-    const minY = top + paddingY;
-    const maxY = top + height - paddingY;
-    const centerY = randomBetween(minY + (maxY - minY) * 0.25, maxY - (maxY - minY) * 0.2);
-    const spanX = maxX - minX;
-    const spanY = maxY - minY;
-    const waveCount = Math.floor(randomBetween(2, 4));
-    const mainPoints: Stroke = [];
-    const totalPoints = Math.floor(randomBetween(22, 34));
+  const CANVAS_SPACE = 1000;
+  const VIRTUAL_CANVAS = {
+    width: 960,
+    height: 360,
+  };
+  const fontCache = new Map<string, OpenTypeFont>();
 
-    for (let index = 0; index < totalPoints; index += 1) {
-      const ratio = index / (totalPoints - 1);
-      const wave = Math.sin(ratio * Math.PI * waveCount * 2 + randomBetween(-0.12, 0.12));
-      const drift = Math.sin(ratio * Math.PI) * randomBetween(-0.16, 0.16);
-      mainPoints.push([
-        clamp(minX + ratio * spanX + randomBetween(-spanX * 0.015, spanX * 0.015), minX, maxX),
-        clamp(
-          centerY + wave * spanY * randomBetween(0.22, 0.36) + drift * spanY,
-          minY,
-          maxY
-        ),
-      ]);
+  const getOpenType = (): OpenTypeApi => {
+    const api = (window as unknown as { opentype?: OpenTypeApi }).opentype;
+    if (!api) {
+      throw new Error("opentype.js 未加载，无法生成字体骨架签名");
     }
-
-    const strokes: Stroke[] = [mainPoints];
-
-    if (Math.random() > 0.25) {
-      const start = mainPoints[Math.floor(mainPoints.length * randomBetween(0.12, 0.28))];
-      const end: Point = [
-        clamp(start[0] + spanX * randomBetween(0.16, 0.28), minX, maxX),
-        clamp(start[1] - spanY * randomBetween(0.18, 0.34), minY, maxY),
-      ];
-      const control: Point = [
-        (start[0] + end[0]) / 2 + spanX * randomBetween(-0.08, 0.08),
-        Math.min(start[1], end[1]) - spanY * randomBetween(0.12, 0.24),
-      ];
-      const accentPointCount = Math.floor(randomBetween(12, 20));
-      strokes.push(
-        Array.from({ length: accentPointCount }, (_, index) =>
-          quadraticPoint(start, control, end, index / (accentPointCount - 1))
-        )
-      );
-    }
-
-    if (Math.random() > 0.35) {
-      const start = mainPoints[Math.floor(mainPoints.length * randomBetween(0.68, 0.86))];
-      const end: Point = [
-        clamp(start[0] + spanX * randomBetween(0.08, 0.18), minX, maxX),
-        clamp(start[1] + spanY * randomBetween(0.16, 0.3), minY, maxY),
-      ];
-      const control: Point = [
-        start[0] + spanX * randomBetween(0.06, 0.12),
-        start[1] + spanY * randomBetween(0.04, 0.12),
-      ];
-      const tailPointCount = Math.floor(randomBetween(10, 18));
-      strokes.push(
-        Array.from({ length: tailPointCount }, (_, index) =>
-          quadraticPoint(start, control, end, index / (tailPointCount - 1))
-        )
-      );
-    }
-
-    return strokes;
+    return api;
   };
 
-  const fireStrokeEvents = async (target: HTMLElement): Promise<void> => {
-    const strokes = createSignatureStrokes(target);
+  const loadFont = async (fontConfig: { name: string; path: string }): Promise<OpenTypeFont> => {
+    const cached = fontCache.get(fontConfig.path);
+    if (cached) return cached;
+
+    const response = await fetch(fontConfig.path);
+    if (!response.ok) {
+      throw new Error(`字体加载失败：${fontConfig.name}`);
+    }
+
+    const font = getOpenType().parse(await response.arrayBuffer());
+    fontCache.set(fontConfig.path, font);
+    return font;
+  };
+
+  const fontSupportsName = (font: OpenTypeFont, name: string): boolean => {
+    return Array.from(name).every((char) => {
+      const glyph = font.charToGlyph(char);
+      return glyph && glyph.index !== 0;
+    });
+  };
+
+  const pickFontForName = async (name: string): Promise<OpenTypeFont> => {
+    if (!name) {
+      throw new Error("签名姓名为空，降级为人工签字");
+    }
+
+    if (!signatureFonts.length) {
+      throw new Error("未配置签名字体，降级为人工签字");
+    }
+
+    const usableFonts: OpenTypeFont[] = [];
+    for (const fontConfig of signatureFonts) {
+      const font = await loadFont(fontConfig);
+      if (fontSupportsName(font, name)) {
+        usableFonts.push(font);
+      }
+    }
+
+    if (!usableFonts.length) {
+      throw new Error(`字体库缺少签名文字：${name}`);
+    }
+
+    return usableFonts[Math.floor(Math.random() * usableFonts.length)];
+  };
+
+  const commandPoint = (command: Record<string, number | string>, key: string): number =>
+    Number(command[key] || 0);
+
+  const cubicShapePoint = (
+    start: ShapePoint,
+    controlA: ShapePoint,
+    controlB: ShapePoint,
+    end: ShapePoint,
+    ratio: number
+  ): ShapePoint => {
+    const inverse = 1 - ratio;
+    return {
+      x:
+        inverse * inverse * inverse * start.x +
+        3 * inverse * inverse * ratio * controlA.x +
+        3 * inverse * ratio * ratio * controlB.x +
+        ratio * ratio * ratio * end.x,
+      y:
+        inverse * inverse * inverse * start.y +
+        3 * inverse * inverse * ratio * controlA.y +
+        3 * inverse * ratio * ratio * controlB.y +
+        ratio * ratio * ratio * end.y,
+    };
+  };
+
+  const quadraticShapePoint = (
+    start: ShapePoint,
+    control: ShapePoint,
+    end: ShapePoint,
+    ratio: number
+  ): ShapePoint => {
+    const inverse = 1 - ratio;
+    return {
+      x: inverse * inverse * start.x + 2 * inverse * ratio * control.x + ratio * ratio * end.x,
+      y: inverse * inverse * start.y + 2 * inverse * ratio * control.y + ratio * ratio * end.y,
+    };
+  };
+
+  const pathToContours = (
+    path: { commands: Array<Record<string, number | string>> },
+    samplesPerCurve: number
+  ): ShapePoint[][] => {
+    const contours: ShapePoint[][] = [];
+    let current: ShapePoint[] | null = null;
+    let cursor: ShapePoint = { x: 0, y: 0 };
+    let start: ShapePoint | null = null;
+
+    for (const command of path.commands) {
+      if (command.type === "M") {
+        current = [{ x: commandPoint(command, "x"), y: commandPoint(command, "y") }];
+        contours.push(current);
+        cursor = current[0];
+        start = cursor;
+      } else if (command.type === "L" && current) {
+        cursor = { x: commandPoint(command, "x"), y: commandPoint(command, "y") };
+        current.push(cursor);
+      } else if (command.type === "C" && current) {
+        const end = { x: commandPoint(command, "x"), y: commandPoint(command, "y") };
+        for (let index = 1; index <= samplesPerCurve; index += 1) {
+          current.push(
+            cubicShapePoint(
+              cursor,
+              { x: commandPoint(command, "x1"), y: commandPoint(command, "y1") },
+              { x: commandPoint(command, "x2"), y: commandPoint(command, "y2") },
+              end,
+              index / samplesPerCurve
+            )
+          );
+        }
+        cursor = end;
+      } else if (command.type === "Q" && current) {
+        const end = { x: commandPoint(command, "x"), y: commandPoint(command, "y") };
+        for (let index = 1; index <= samplesPerCurve; index += 1) {
+          current.push(
+            quadraticShapePoint(
+              cursor,
+              { x: commandPoint(command, "x1"), y: commandPoint(command, "y1") },
+              end,
+              index / samplesPerCurve
+            )
+          );
+        }
+        cursor = end;
+      } else if (command.type === "Z" && current && start) {
+        current.push({ ...start });
+      }
+    }
+
+    return contours.filter((contour) => contour.length > 1);
+  };
+
+  const getShapeBounds = (contours: ShapePoint[][]) => {
+    const points = contours.flat();
+    return points.reduce(
+      (bounds, point) => ({
+        minX: Math.min(bounds.minX, point.x),
+        maxX: Math.max(bounds.maxX, point.x),
+        minY: Math.min(bounds.minY, point.y),
+        maxY: Math.max(bounds.maxY, point.y),
+      }),
+      { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+    );
+  };
+
+  const transformContours = (contours: ShapePoint[][]): ShapePoint[][] => {
+    const bounds = getShapeBounds(contours);
+    const sourceWidth = Math.max(1, bounds.maxX - bounds.minX);
+    const sourceHeight = Math.max(1, bounds.maxY - bounds.minY);
+    const padding = 52;
+    const targetWidth = VIRTUAL_CANVAS.width - padding * 2;
+    const targetHeight = VIRTUAL_CANVAS.height - padding * 2;
+    const fitScale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+    const scaleX = skeletonConfig.scaleX / 100;
+    const slant = skeletonConfig.slant / 100;
+    const jitter = skeletonConfig.jitter;
+    const fittedWidth = sourceWidth * fitScale * scaleX;
+    const fittedHeight = sourceHeight * fitScale;
+    const offsetX = (VIRTUAL_CANVAS.width - fittedWidth) / 2;
+    const offsetY = (VIRTUAL_CANVAS.height - fittedHeight) / 2;
+
+    return contours.map((contour, contourIndex) =>
+      contour.map((point, pointIndex) => {
+        const localX = (point.x - bounds.minX) * fitScale * scaleX;
+        const localY = (point.y - bounds.minY) * fitScale;
+        const baselineShift = (localY - fittedHeight * 0.52) * slant;
+        const noiseSeed = Math.sin((contourIndex + 1) * 31.17 + (pointIndex + 1) * 17.43);
+        const noise = noiseSeed * jitter;
+        return {
+          x: offsetX + localX + baselineShift + noise,
+          y: offsetY + localY + noise * 0.45,
+        };
+      })
+    );
+  };
+
+  const makeCanvasPath = (contours: ShapePoint[][]): Path2D => {
+    const path = new Path2D();
+    for (const contour of contours) {
+      const first = contour[0];
+      path.moveTo(first.x, first.y);
+      for (const point of contour.slice(1)) {
+        path.lineTo(point.x, point.y);
+      }
+      path.closePath();
+    }
+    return path;
+  };
+
+  const rasterizeContours = (contours: ShapePoint[][]) => {
+    const scale = 0.75;
+    const width = Math.ceil(VIRTUAL_CANVAS.width * scale);
+    const height = Math.ceil(VIRTUAL_CANVAS.height * scale);
+    const rasterCanvas = document.createElement("canvas");
+    rasterCanvas.width = width;
+    rasterCanvas.height = height;
+    const rasterContext = rasterCanvas.getContext("2d");
+
+    if (!rasterContext) {
+      throw new Error("无法创建签名骨架栅格画布");
+    }
+
+    rasterContext.save();
+    rasterContext.scale(scale, scale);
+    rasterContext.fillStyle = "#000";
+    rasterContext.fill(makeCanvasPath(contours));
+    rasterContext.restore();
+
+    const imageData = rasterContext.getImageData(0, 0, width, height);
+    const pixels = new Uint8Array(width * height);
+
+    for (let index = 0; index < pixels.length; index += 1) {
+      pixels[index] = imageData.data[index * 4 + 3] > 20 ? 1 : 0;
+    }
+
+    return { pixels, width, height, scale };
+  };
+
+  const skeletonNeighborValues = (pixels: Uint8Array, width: number, x: number, y: number) => {
+    const index = (nx: number, ny: number) => (pixels[ny * width + nx] ? 1 : 0);
+    return [
+      index(x, y - 1),
+      index(x + 1, y - 1),
+      index(x + 1, y),
+      index(x + 1, y + 1),
+      index(x, y + 1),
+      index(x - 1, y + 1),
+      index(x - 1, y),
+      index(x - 1, y - 1),
+    ];
+  };
+
+  const countTransitions = (neighbors: number[]): number => {
+    let transitions = 0;
+    for (let index = 0; index < neighbors.length; index += 1) {
+      if (neighbors[index] === 0 && neighbors[(index + 1) % neighbors.length] === 1) {
+        transitions += 1;
+      }
+    }
+    return transitions;
+  };
+
+  const thinSkeletonPixels = (
+    sourcePixels: Uint8Array,
+    width: number,
+    height: number
+  ): Uint8Array => {
+    const pixels = new Uint8Array(sourcePixels);
+    const maxIterations = 80;
+    let changed = true;
+    let iteration = 0;
+
+    while (changed && iteration < maxIterations) {
+      changed = false;
+
+      for (let pass = 0; pass < 2; pass += 1) {
+        const toRemove: number[] = [];
+
+        for (let y = 1; y < height - 1; y += 1) {
+          for (let x = 1; x < width - 1; x += 1) {
+            const pixelIndex = y * width + x;
+            if (!pixels[pixelIndex]) continue;
+
+            const neighbors = skeletonNeighborValues(pixels, width, x, y);
+            const neighborCount = neighbors.reduce((sum, value) => sum + value, 0);
+            const transitions = countTransitions(neighbors);
+            const [p2, , p4, , p6, , p8] = neighbors;
+            const passCondition =
+              pass === 0
+                ? p2 * p4 * p6 === 0 && p4 * p6 * p8 === 0
+                : p2 * p4 * p8 === 0 && p2 * p6 * p8 === 0;
+
+            if (
+              neighborCount >= 2 &&
+              neighborCount <= 6 &&
+              transitions === 1 &&
+              passCondition
+            ) {
+              toRemove.push(pixelIndex);
+            }
+          }
+        }
+
+        if (toRemove.length) {
+          changed = true;
+          toRemove.forEach((pixelIndex) => {
+            pixels[pixelIndex] = 0;
+          });
+        }
+      }
+
+      iteration += 1;
+    }
+
+    return pixels;
+  };
+
+  const getSkeletonNeighbors = (
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+    x: number,
+    y: number
+  ): ShapePoint[] => {
+    const neighbors: ShapePoint[] = [];
+
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        if (pixels[ny * width + nx]) {
+          neighbors.push({ x: nx, y: ny });
+        }
+      }
+    }
+
+    return neighbors;
+  };
+
+  const traceSkeletonPixels = (
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+    scale: number
+  ): ShapePoint[][] => {
+    const visitedEdges = new Set<string>();
+    const key = (point: ShapePoint) => `${point.x},${point.y}`;
+    const edgeKey = (leftPoint: ShapePoint, rightPoint: ShapePoint) => {
+      const left = key(leftPoint);
+      const right = key(rightPoint);
+      return left < right ? `${left}|${right}` : `${right}|${left}`;
+    };
+    const points: ShapePoint[] = [];
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (pixels[y * width + x]) {
+          points.push({ x, y });
+        }
+      }
+    }
+
+    const degreeOf = (point: ShapePoint) =>
+      getSkeletonNeighbors(pixels, width, height, point.x, point.y).length;
+    const starts = points
+      .filter((point) => degreeOf(point) !== 2)
+      .sort((left, right) => left.x - right.x || left.y - right.y);
+    const allStarts = starts.length ? starts : points.sort((left, right) => left.x - right.x || left.y - right.y);
+    const traced: ShapePoint[][] = [];
+
+    const traceFrom = (start: ShapePoint, next: ShapePoint): ShapePoint[] => {
+      const stroke = [start];
+      let previous = start;
+      let current: ShapePoint | undefined = next;
+      visitedEdges.add(edgeKey(start, next));
+
+      while (current) {
+        stroke.push(current);
+        const neighbors: ShapePoint[] = getSkeletonNeighbors(pixels, width, height, current.x, current.y)
+          .filter((neighbor) => key(neighbor) !== key(previous))
+          .filter((neighbor) => !visitedEdges.has(edgeKey(current!, neighbor)));
+
+        if (neighbors.length !== 1) break;
+
+        const following: ShapePoint = neighbors[0];
+        visitedEdges.add(edgeKey(current, following));
+        previous = current;
+        current = following;
+      }
+
+      return stroke;
+    };
+
+    for (const start of allStarts) {
+      const neighbors = getSkeletonNeighbors(pixels, width, height, start.x, start.y)
+        .filter((neighbor) => !visitedEdges.has(edgeKey(start, neighbor)))
+        .sort((left, right) => left.x - right.x || left.y - right.y);
+
+      for (const neighbor of neighbors) {
+        const stroke = traceFrom(start, neighbor);
+        if (stroke.length > 2) {
+          traced.push(stroke);
+        }
+      }
+    }
+
+    return traced.map((stroke) =>
+      stroke.map((point) => ({
+        x: point.x / scale,
+        y: point.y / scale,
+      }))
+    );
+  };
+
+  const pointDistance = (left: ShapePoint, right: ShapePoint): number =>
+    Math.hypot(left.x - right.x, left.y - right.y);
+
+  const pointStrokeLength = (stroke: ShapePoint[]): number => {
+    let length = 0;
+    for (let index = 1; index < stroke.length; index += 1) {
+      length += pointDistance(stroke[index - 1], stroke[index]);
+    }
+    return length;
+  };
+
+  const simplifyPointStroke = (stroke: ShapePoint[]): ShapePoint[] => {
+    const simplified: ShapePoint[] = [];
+    let previous: ShapePoint | null = null;
+    const step = 2;
+
+    stroke.forEach((point, index) => {
+      if (
+        index === 0 ||
+        index === stroke.length - 1 ||
+        !previous ||
+        Math.hypot(point.x - previous.x, point.y - previous.y) >= step
+      ) {
+        simplified.push(point);
+        previous = point;
+      }
+    });
+
+    return simplified;
+  };
+
+  const pruneShortSkeletonStrokes = (strokes: ShapePoint[][]): ShapePoint[][] => {
+    return strokes.filter((stroke) => stroke.length >= 4 && pointStrokeLength(stroke) >= 14);
+  };
+
+  const bridgeSkeletonStrokes = (strokes: ShapePoint[][]): ShapePoint[][] => {
+    const maxBridgeDistance = 22;
+    const merged = strokes.map((stroke) => [...stroke]);
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+
+      outer: for (let leftIndex = 0; leftIndex < merged.length; leftIndex += 1) {
+        const left = merged[leftIndex];
+        const leftStart = left[0];
+        const leftEnd = left[left.length - 1];
+
+        for (let rightIndex = leftIndex + 1; rightIndex < merged.length; rightIndex += 1) {
+          const right = merged[rightIndex];
+          const rightStart = right[0];
+          const rightEnd = right[right.length - 1];
+          const candidates = [
+            { distance: pointDistance(leftEnd, rightStart), stroke: [...left, ...right] },
+            { distance: pointDistance(leftEnd, rightEnd), stroke: [...left, ...right.slice().reverse()] },
+            { distance: pointDistance(leftStart, rightEnd), stroke: [...right, ...left] },
+            { distance: pointDistance(leftStart, rightStart), stroke: [...right.slice().reverse(), ...left] },
+          ].sort((a, b) => a.distance - b.distance);
+
+          if (candidates[0].distance <= maxBridgeDistance) {
+            merged[leftIndex] = candidates[0].stroke;
+            merged.splice(rightIndex, 1);
+            changed = true;
+            break outer;
+          }
+        }
+      }
+    }
+
+    return merged;
+  };
+
+  const getTargetDrawingBox = (target: HTMLElement) => {
+    const rect = target.getBoundingClientRect();
+    const fallbackWidth = Math.min(window.innerWidth * 0.78, 360);
+    const fallbackHeight = Math.min(window.innerHeight * 0.30, 170);
+    const left = rect.width > 20 ? rect.left : (window.innerWidth - fallbackWidth) / 2;
+    const top = rect.height > 20 ? rect.top : window.innerHeight * 0.36;
+    const width = rect.width > 20 ? rect.width : fallbackWidth;
+    const height = rect.height > 20 ? rect.height : fallbackHeight;
+    const safeWidth = width * 0.74;
+    const safeHeight = height * 0.18;
+    const safeLeft = left + width * 0.10;
+    const safeCenterY = top + height * 0.52;
+
+    // 第一步：签字板是竖向显示区域，但签名需要横排，所以只使用中部一条较矮的安全带。
+    return {
+      minX: safeLeft,
+      maxX: safeLeft + safeWidth,
+      minY: safeCenterY - safeHeight / 2,
+      maxY: safeCenterY + safeHeight / 2,
+    };
+  };
+
+  const getPointStrokesBounds = (pointStrokes: ShapePoint[][]) => {
+    const points = pointStrokes.flat();
+    return points.reduce(
+      (bounds, point) => ({
+        minX: Math.min(bounds.minX, point.x),
+        maxX: Math.max(bounds.maxX, point.x),
+        minY: Math.min(bounds.minY, point.y),
+        maxY: Math.max(bounds.maxY, point.y),
+      }),
+      { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+    );
+  };
+
+  const pointStrokesToTargetStrokes = (
+    target: HTMLElement,
+    pointStrokes: ShapePoint[][]
+  ): Stroke[] => {
+    const box = getTargetDrawingBox(target);
+    const sourceBounds = getPointStrokesBounds(pointStrokes);
+    const sourceWidth = Math.max(1, sourceBounds.maxX - sourceBounds.minX);
+    const sourceHeight = Math.max(1, sourceBounds.maxY - sourceBounds.minY);
+    const targetWidth = Math.max(1, box.maxX - box.minX);
+    const targetHeight = Math.max(1, box.maxY - box.minY);
+    const widthScale = targetWidth / sourceWidth;
+    const heightScale = targetHeight / sourceHeight;
+    const scale = Math.min(widthScale, heightScale) * 0.86;
+    const fittedWidth = sourceWidth * scale;
+    const fittedHeight = sourceHeight * scale;
+    const offsetX = box.minX + Math.max(0, (targetWidth - fittedWidth) * 0.03);
+    const offsetY = box.minY + Math.max(0, (targetHeight - fittedHeight) * 0.5);
+
+    // 第一步：所有点都夹在安全带内，避免 SDK 判断越界后提前结束笔画。
+    return pointStrokes.map((stroke) =>
+      stroke.map((point) => [
+        clamp(offsetX + (point.x - sourceBounds.minX) * scale, box.minX, box.maxX),
+        clamp(offsetY + (point.y - sourceBounds.minY) * scale, box.minY, box.maxY),
+      ])
+    );
+  };
+
+  const createSkeletonSignatureStrokes = async (
+    target: HTMLElement,
+    name: string
+  ): Promise<Stroke[]> => {
+    const font = await pickFontForName(name);
+
+    const path = font.getPath(name, 0, skeletonConfig.fontSize, skeletonConfig.fontSize);
+    const rawContours = pathToContours(path, skeletonConfig.sampleDensity);
+    if (!rawContours.length) {
+      throw new Error(`没有从字体中解析到签名轮廓：${name}`);
+    }
+    const contours = transformContours(rawContours);
+
+    const raster = rasterizeContours(contours);
+    const skeletonPixels = thinSkeletonPixels(raster.pixels, raster.width, raster.height);
+    const traced = traceSkeletonPixels(skeletonPixels, raster.width, raster.height, raster.scale)
+      .map(simplifyPointStroke);
+    const pointStrokes = bridgeSkeletonStrokes(pruneShortSkeletonStrokes(traced))
+      .map(simplifyPointStroke)
+      .sort((left, right) => left[0].x - right[0].x || left[0].y - right[0].y)
+      .filter((stroke) => stroke.length > 2);
+
+    if (!pointStrokes.length) {
+      throw new Error(`没有生成有效签名骨架：${name}`);
+    }
+
+    return pointStrokesToTargetStrokes(target, pointStrokes);
+  };
+
+  const fireStrokeEvents = async (target: HTMLElement, strokes: Stroke[]): Promise<void> => {
     let pointerId = Date.now() % 100000;
 
     for (const stroke of strokes) {
@@ -671,21 +1240,34 @@ function mobileSignAutomation(
     return true;
   };
 
-  const drawOneSignature = async (): Promise<boolean> => {
+  const drawOneSignature = async (
+    signatureIndex: number
+  ): Promise<"signed" | "manualFallback" | "done"> => {
     const positionCount = await focusNextSignature();
     const signEntry = findSignatureImageEntry();
 
     if (!signEntry) {
-      return positionCount <= 0;
+      return positionCount <= 0 ? "done" : "manualFallback";
     }
 
     clickElement(signEntry);
-    await wait(1000);
-    await fireStrokeEvents(topSignTarget());
+    await waitUntil(
+      "signature drawing board",
+      () => Boolean(findSignatureBoardTarget()),
+      5000,
+      100
+    ).catch(async () => {
+      // 第一步：部分兜底页面没有 SDK 签字板类名，保留短暂等待后继续使用旧容器策略。
+      await wait(600);
+    });
+    const signTarget = topSignTarget();
+    const signatureName = signatureNames[signatureIndex] || "";
+    const strokes = await createSkeletonSignatureStrokes(signTarget, signatureName);
+    await fireStrokeEvents(signTarget, strokes);
     await wait(500);
     await tryConfirmSignature();
     await wait(800);
-    return true;
+    return "signed";
   };
 
   const submitSignedDocuments = async (): Promise<boolean> => {
@@ -797,6 +1379,11 @@ function mobileSignAutomation(
       }
 
       await waitForSignPageReady();
+
+      if (autoSignatureMode !== "skeleton-strokes") {
+        throw new Error(`不支持的自动签名模式：${autoSignatureMode}`);
+      }
+
       const initialCount = getPositionCount();
       if (!findPositionButton() && initialCount <= 0) {
         return {
@@ -809,7 +1396,13 @@ function mobileSignAutomation(
       let previousCount = initialCount;
       for (let index = 0; index < SIGN_LIMITS.maxSignaturePositions; index += 1) {
         if (previousCount <= 0) break;
-        if (!(await drawOneSignature())) break;
+        const signResult = await drawOneSignature(index);
+        if (signResult === "done") break;
+        if (signResult === "manualFallback") {
+          await waitForManualSignaturesComplete();
+          await waitForManualSignatureSuccess();
+          return { success: true };
+        }
         signedCount += 1;
         previousCount = await waitForPositionCountBelow(previousCount);
       }
@@ -822,9 +1415,7 @@ function mobileSignAutomation(
         throw new Error(`仍有未完成签字数量：${getPositionCount()}`);
       }
 
-      if (!(await submitSignedDocuments())) {
-        throw new Error(`没有找到提交签署按钮：${location.href}`);
-      }
+      await waitForManualSignatureSuccess();
 
       return { success: true };
     } catch (error) {

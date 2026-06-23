@@ -373,10 +373,20 @@ async function decodeQrUrl(modal: HTMLElement): Promise<string> {
   return url;
 }
 
-async function openMobileSignPage(url: string): Promise<void> {
+async function openMobileSignPage(
+  url: string,
+  signatureNames: string[]
+): Promise<void> {
   const response = (await browser.runtime.sendMessage({
     action: "openMobileSignPage",
-    data: { url, signatureMode: ORAL_CASE_CONFIG.signatureMode },
+    data: {
+      url,
+      signatureMode: ORAL_CASE_CONFIG.signatureMode,
+      autoSignatureMode: ORAL_CASE_CONFIG.autoSignatureMode,
+      signatureNames,
+      signatureFonts: ORAL_CASE_CONFIG.signatureFonts,
+      skeletonConfig: ORAL_CASE_CONFIG.skeletonSignature,
+    },
   } satisfies RequestAction<OpenMobileSignPagePayload>)) as ResponseResult;
 
   if (!response?.success) {
@@ -402,7 +412,7 @@ function isSealButtonReady(): boolean {
   return hasVisibleButton("签章");
 }
 
-export async function runSignatureFlow(): Promise<void> {
+export async function runSignatureFlow(signatureNames: string[]): Promise<void> {
   if (isSealButtonReady()) {
     return;
   }
@@ -435,9 +445,9 @@ export async function runSignatureFlow(): Promise<void> {
 
     if (modalText.includes("生成二维码") || modalText.includes("二维码")) {
       const qrUrl = await decodeQrUrl(modal);
-      // console.log(qrUrl, 'qrUrl');
+      console.log(qrUrl, 'qrUrl');
       // throw Error('test');
-      await openMobileSignPage(qrUrl);
+      await openMobileSignPage(qrUrl, signatureNames);
       await closeQrCodeModal(modal);
       await waitForSealButtonReady();
       return;
