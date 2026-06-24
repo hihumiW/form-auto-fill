@@ -37,10 +37,16 @@ function App() {
       <h1>表单自动化</h1>
       <div className="card">
         <button onClick={() => handleFormFill("applyForm")}>
-          自动处理当事人申请
+          当事人申请
         </button>
         <button onClick={() => handleFormFill("oralCase")}>
-          自动处理口头案件办理
+          口头案件办理
+        </button>
+        <button onClick={() => handleFormFill("oralArchive")}>
+          归档口头案件
+        </button>
+        <button onClick={() => handleFormFill("oralAudit")}>
+          审核口头案件
         </button>
       </div>
       <p className="read-the-docs">要停止，直接刷新页面即可</p>

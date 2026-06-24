@@ -47,12 +47,16 @@ function getDetailContentRoot(): HTMLElement {
 }
 
 function findProtocolStep(): HTMLElement {
+  return findCaseStep("口头协议登记表");
+}
+
+function findCaseStep(stepName: string): HTMLElement {
   const step = Array.from(
     document.querySelectorAll<HTMLElement>(".case-steps-container .step-item")
-  ).find((item) => getElementText(item).includes("口头协议登记表"));
+  ).find((item) => getElementText(item).includes(stepName));
 
   if (!step) {
-    throw new Error("没有找到口头协议登记表步骤");
+    throw new Error(`没有找到${stepName}步骤`);
   }
 
   return step;
@@ -738,4 +742,146 @@ export async function runArchiveFlow(): Promise<void> {
   );
 
   await wait(1000);
+}
+
+export function validateOralArchivePrerequisites(): void {
+  const applyStepText = getElementText(findCaseStep("申请书"));
+  if (!applyStepText.includes("已录入")) {
+    throw new Error("申请书不是已录入状态，停止自动归档");
+  }
+
+  const protocolStep = findCaseStep("口头协议登记表");
+  const protocolStepText = getElementText(protocolStep);
+  if (!protocolStepText.includes("已录入")) {
+    throw new Error("口头协议登记表不是已录入状态，停止自动归档");
+  }
+
+  const protocolIconCount = protocolStep.querySelectorAll(
+    ".item-icons img, .item-icons image"
+  ).length;
+  if (protocolIconCount !== 3) {
+    throw new Error(
+      `口头协议登记表图标数量异常，期望 3 个，实际 ${protocolIconCount} 个`
+    );
+  }
+}
+
+export function isElectronicArchiveCompleted(): boolean {
+  return getElementText(findCaseStep("电子卷宗")).includes("已归档");
+}
+
+export function isElectronicArchivePending(): boolean {
+  return getElementText(findCaseStep("电子卷宗")).includes("未归档");
+}
+
+export async function runOneClickElectronicArchiveFlow(): Promise<void> {
+  const electronicArchiveStep = findCaseStep("电子卷宗");
+  $(electronicArchiveStep).trigger("click");
+
+  await waitUntil(
+    "一键归档按钮出现",
+    () => hasVisibleButton("一键归档"),
+    DEFAULT_MODAL_TIMEOUT,
+    DEFAULT_POLL_INTERVAL
+  );
+
+  await clickVisibleButton("一键归档");
+
+  let retentionModal: HTMLElement | undefined;
+  await waitUntil(
+    "卷宗保管期限弹窗打开",
+    () => {
+      retentionModal = findVisibleModalByText("卷宗保管期限");
+      return Boolean(retentionModal);
+    },
+    DEFAULT_MODAL_TIMEOUT,
+    DEFAULT_POLL_INTERVAL
+  );
+
+  if (!retentionModal) {
+    throw new Error("没有找到卷宗保管期限弹窗");
+  }
+
+  await selectDropdownByLabel("保管期限", "短期", {
+    scope: retentionModal,
+  });
+  await clickModalConfirmButton(retentionModal);
+
+  let previewModal: HTMLElement | undefined;
+  await waitUntil(
+    "一键归档预览弹窗打开",
+    () => {
+      previewModal = findVisibleModalByText("一键归档预览");
+      return Boolean(previewModal);
+    },
+    DEFAULT_MODAL_TIMEOUT,
+    DEFAULT_POLL_INTERVAL
+  );
+
+  if (!previewModal) {
+    throw new Error("没有找到一键归档预览弹窗");
+  }
+
+  await clickModalConfirmButton(previewModal);
+
+  let finalConfirmModal: HTMLElement | undefined;
+  await waitUntil(
+    "归档提示弹窗打开",
+    () => {
+      finalConfirmModal = findVisibleModalByText("归档提示");
+      return Boolean(finalConfirmModal);
+    },
+    DEFAULT_MODAL_TIMEOUT,
+    DEFAULT_POLL_INTERVAL
+  );
+
+  if (!finalConfirmModal) {
+    throw new Error("没有找到归档提示弹窗");
+  }
+
+  await clickModalConfirmButton(finalConfirmModal);
+
+  await waitUntil(
+    "一键归档完成",
+    () => {
+      const previewClosed =
+        !previewModal || !isVisibleElement(previewModal);
+      const finalConfirmClosed =
+        !finalConfirmModal || !isVisibleElement(finalConfirmModal);
+
+      return (
+        previewClosed &&
+        finalConfirmClosed &&
+        (hasVisibleButton("申请审核"))
+      );
+    },
+    60000,
+    DEFAULT_POLL_INTERVAL
+  );
+
+  await wait(1000);
+
+  await clickVisibleButton('申请审核')
+
+  let approvalModal : HTMLElement | undefined;
+  await waitUntil('申请审核弹窗打开', () => {
+    approvalModal = findVisibleModalByText('申请审核')
+    return Boolean(approvalModal)
+  });
+
+  await wait(500);
+
+  await clickVisibleButton('确定', approvalModal);
+
+  await wait(500);
+
+  await waitUntil('等待审核弹窗关闭', () => {
+     const modal = Array.from(document.querySelectorAll<HTMLElement>(".ant-modal")).find(
+    (element) => isVisibleElement(element)
+  );
+  console.log('modal',modal)
+    return Boolean(!modal);
+  });
+  console.log('cnm');
+
 }

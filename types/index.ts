@@ -1,4 +1,4 @@
-export type TriggerType = "applyForm"  | "oralCase";
+export type TriggerType = "applyForm" | "oralCase" | "oralArchive" | "oralAudit";
 export type BackgroundAction = "openMobileSignPage";
 export type SignatureMode = "manual" | "auto";
 export type AutoSignatureMode = "hanzi-medians";

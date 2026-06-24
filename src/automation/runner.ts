@@ -19,6 +19,10 @@ class WorkflowRunner {
 
     // 根据注册表查找业务流程。
     const workflow = workflowRegistry[triggerType];
+    if (!workflow) {
+      console.log(`没有找到自动处理流程：${triggerType}，请重新构建并刷新插件`);
+      return;
+    }
 
     // 标记流程开始运行。
     this.state.running = true;

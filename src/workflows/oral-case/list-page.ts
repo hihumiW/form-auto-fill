@@ -13,6 +13,10 @@ export interface OralCaseListSelection {
   signatureNames: string[];
 }
 
+export interface OralCaseArchiveSelection {
+  caseNumber: string;
+}
+
 export function isOralCaseListPage(): boolean {
   // 判断当前地址是否停留在口头案件列表页。
   return location.href.includes(ORAL_CASE_LIST_PATH);
@@ -69,6 +73,29 @@ function findFirstOralCaseRow(): JQuery<HTMLElement> {
   return $(row);
 }
 
+function findFirstOralCaseArchiveRow(
+  attemptedCaseNumbers: Set<string>
+): JQuery<HTMLElement> | null {
+  const row = Array.from(
+    document.querySelectorAll<HTMLElement>(TABLE_ROW_SELECTOR)
+  ).find((tableRow) => {
+    const rowText = getElementText(tableRow);
+    const caseNumber = getCaseNumberFromRowText(rowText);
+
+    return (
+      rowText.includes("处理") &&
+      Boolean(caseNumber) &&
+      !attemptedCaseNumbers.has(caseNumber)
+    );
+  });
+
+  return row ? $(row) : null;
+}
+
+function getCaseNumberFromRowText(rowText: string): string {
+  return rowText.match(/（口头）.*?号/)?.[0] || "未知案号";
+}
+
 function normalizeCellText(text?: string | null): string {
   // 去掉表格单元格中的多余空白，保证列名和姓名提取稳定。
   return (text || "").replace(/\s+/g, "").trim();
@@ -122,7 +149,7 @@ export async function openFirstOralCase(): Promise<OralCaseListSelection> {
   // 读取第一条可编辑案件行中的案件号和签名姓名。
   const $row = findFirstOralCaseRow();
   const rowText = getElementText($row);
-  const caseNumber = rowText.match(/（口头）.*?号/)?.[0] || "未知案号";
+  const caseNumber = getCaseNumberFromRowText(rowText);
   const signatureNames = getSignatureNamesFromRow($row[0]);
 
   // 点击编辑进入详情页。
@@ -138,6 +165,32 @@ export async function openFirstOralCase(): Promise<OralCaseListSelection> {
   });
 
   return { caseNumber, signatureNames };
+}
+
+export async function openFirstOralCaseForArchive(
+  attemptedCaseNumbers: Set<string>
+): Promise<OralCaseArchiveSelection | null> {
+  await ensureOralCaseListPage();
+
+  const $row = findFirstOralCaseArchiveRow(attemptedCaseNumbers);
+  if (!$row) {
+    return null;
+  }
+
+  const caseNumber = getCaseNumberFromRowText(getElementText($row));
+  attemptedCaseNumbers.add(caseNumber);
+
+  await clickVisibleButton("处理", $row);
+
+  await waitUntil("进入口头案件办理详情页", () => {
+    return (
+      isOralCaseDetailPage() &&
+      getActiveTabText().includes("口头案件办理详情") &&
+      !!document.querySelector(".case-steps-container")
+    );
+  });
+
+  return { caseNumber };
 }
 
 export async function returnToOralCaseList(): Promise<void> {
