@@ -3,9 +3,8 @@ import type {
   OpenMobileSignPagePayload,
   RequestAction,
   ResponseResult,
-  SignatureFontConfig,
+  SignatureMedianEntry,
   SignatureMode,
-  SkeletonSignatureConfig,
 } from "@/types";
 
 const MOBILE_USER_AGENT =
@@ -13,8 +12,8 @@ const MOBILE_USER_AGENT =
 
 const DEBUGGER_VERSION = "1.3";
 const MOBILE_VIEWPORT = {
-  width: 430,
-  height: 932,
+  width: 768,
+  height: 768,
   deviceScaleFactor: 3,
 };
 const SIGN_PAGE_LOAD_TIMEOUT = 30000;
@@ -22,6 +21,18 @@ const SIGN_PAGE_LOAD_TIMEOUT = 30000;
 type MobileSignScriptResult =
   | { success: true }
   | { success: false; errorMessage: string };
+
+type MobileSignFrameProbe = {
+  href: string;
+  isTopFrame: boolean;
+  hasIframe: boolean;
+  hasPositionButton: boolean;
+  positionCount: number;
+  hasSubmit: boolean;
+  hasSuccess: boolean;
+  hasSignatureEntry: boolean;
+  hasSignatureBoard: boolean;
+};
 
 interface Debuggee {
   tabId: number;
@@ -108,6 +119,79 @@ async function waitForTabComplete(
   throw new Error("移动端签字页面加载超时");
 }
 
+function probeMobileSignFrame(): MobileSignFrameProbe {
+  const normalizeText = (text?: string | null) => (text || "").replace(/\s+/g, "");
+  const getElementWindow = (element: Element) => element.ownerDocument.defaultView || window;
+  const isVisible = (element?: Element | null): element is HTMLElement => {
+    if (!element) return false;
+    const htmlElement = element as HTMLElement;
+    const rect = htmlElement.getBoundingClientRect();
+    const style = getElementWindow(htmlElement).getComputedStyle(htmlElement);
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+  const queryAll = <T extends Element>(selector: string): T[] =>
+    Array.from(document.querySelectorAll<T>(selector));
+  const getElementText = (element: Element) => normalizeText(element.textContent || "");
+  const findClickableByText = (texts: string[]): HTMLElement | undefined => {
+    const normalizedTexts = texts.map(normalizeText);
+    const candidates = queryAll<HTMLElement>("button, .van-button, [role='button'], a, div, span")
+      .filter(isVisible);
+
+    return candidates.find((candidate) => {
+      const text = getElementText(candidate);
+      return normalizedTexts.some((item) => text.includes(item));
+    });
+  };
+  const positionButton = queryAll<HTMLElement>(".ax-pdf-overlay-position-btn")
+    .find(isVisible);
+  const wrapper = positionButton?.parentElement;
+  const countText =
+    wrapper?.querySelector<HTMLElement>(".ax-pdf-overlay-count")?.textContent ||
+    wrapper?.textContent ||
+    "";
+  const count = Number.parseInt(countText.replace(/[^\d]/g, ""), 10);
+  const hasSignatureEntry = queryAll<HTMLElement>(
+    ".overlay-elem.required.overlay-elem-img, .img-sign-wrapper, [class*='img-sign'], [class*='sign-wrapper'], [class*='signWrapper'], .element-wrapper"
+  ).some((element) => {
+    const text = getElementText(element);
+    const className = element.className.toString();
+    return (
+      isVisible(element) &&
+      (text.includes("签字") ||
+        text.includes("签名") ||
+        className.includes("overlay-elem-img") ||
+        className.includes("sign") ||
+        !!element.querySelector("img"))
+    );
+  });
+  const hasSignatureBoard = queryAll<HTMLElement>(
+    ".listener, .ax-sign-free-svg, .ax-sign-svg, .ax-writing-board-content .view, .ax-writing-board-content"
+  ).some((element) => {
+    const rect = element.getBoundingClientRect();
+    return isVisible(element) && rect.width >= 20 && rect.height >= 20;
+  });
+
+  return {
+    href: location.href,
+    isTopFrame: window.top === window,
+    hasIframe: Boolean(document.querySelector("iframe")),
+    hasPositionButton: Boolean(positionButton),
+    positionCount: Number.isFinite(count) ? count : 0,
+    hasSubmit: Boolean(findClickableByText(["提交签署", "提交签字", "提交"])),
+    hasSuccess: queryAll<HTMLElement>("uni-modal, .uni-modal")
+      .filter(isVisible)
+      .some((element) => getElementText(element).includes("签字成功")),
+    hasSignatureEntry,
+    hasSignatureBoard,
+  };
+}
+
 async function setupMobileEnvironment(debuggee: Debuggee): Promise<void> {
   await sendDebuggerCommand(debuggee, "Network.enable");
   await sendDebuggerCommand(debuggee, "Network.setUserAgentOverride", {
@@ -126,31 +210,130 @@ async function setupMobileEnvironment(debuggee: Debuggee): Promise<void> {
   });
 }
 
+async function probeMobileSignFrames(tabId: number): Promise<
+  Array<MobileSignFrameProbe & { frameId: number }>
+> {
+  const results = await browser.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: probeMobileSignFrame,
+  });
+
+  return results.map((result) => ({
+    ...((result.result || {}) as MobileSignFrameProbe),
+    frameId: (result as unknown as { frameId?: number }).frameId ?? 0,
+  }));
+}
+
+function pickMobileSignFrame(
+  probes: Array<MobileSignFrameProbe & { frameId: number }>
+): (MobileSignFrameProbe & { frameId: number }) | undefined {
+  return probes
+    .filter((probe) => {
+      return (
+        probe.hasPositionButton ||
+        probe.hasSignatureEntry ||
+        probe.hasSignatureBoard ||
+        probe.hasSubmit
+      );
+    })
+    .sort((left, right) => {
+      const score = (probe: MobileSignFrameProbe) => {
+        if (probe.hasPositionButton && probe.positionCount > 0) return 0;
+        if (probe.hasSignatureEntry) return 1;
+        if (probe.hasSignatureBoard) return 2;
+        if (probe.hasSubmit) return 3;
+        return 4;
+      };
+
+      return score(left) - score(right);
+    })[0];
+}
+
+function summarizeMobileSignFrames(
+  probes: Array<MobileSignFrameProbe & { frameId: number }>
+): string {
+  return probes
+    .map((probe) => {
+      return [
+        `frame=${probe.frameId}`,
+        probe.isTopFrame ? "top" : "child",
+        `count=${probe.positionCount}`,
+        `position=${probe.hasPositionButton}`,
+        `entry=${probe.hasSignatureEntry}`,
+        `board=${probe.hasSignatureBoard}`,
+        `submit=${probe.hasSubmit}`,
+        `success=${probe.hasSuccess}`,
+        `iframe=${probe.hasIframe}`,
+        probe.href,
+      ].join(",");
+    })
+    .join(" | ");
+}
+
+async function getMobileSignScriptTarget(
+  tabId: number,
+  signatureMode: SignatureMode
+): Promise<{ tabId: number; frameIds: number[] }> {
+  if (signatureMode === "manual") {
+    return { tabId, frameIds: [0] };
+  }
+
+  const startTime = Date.now();
+  let latestProbes: Array<MobileSignFrameProbe & { frameId: number }> = [];
+
+  while (Date.now() - startTime < SIGN_PAGE_LOAD_TIMEOUT) {
+    latestProbes = await probeMobileSignFrames(tabId);
+    const targetFrame = pickMobileSignFrame(latestProbes);
+
+    if (targetFrame) {
+      console.log(
+        "移动端签字脚本命中 frame",
+        targetFrame.frameId,
+        summarizeMobileSignFrames(latestProbes)
+      );
+      return { tabId, frameIds: [targetFrame.frameId] };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  throw new Error(
+    `移动端签字页面没有找到可执行 frame：${summarizeMobileSignFrames(latestProbes)}`
+  );
+}
+
+async function waitForMobileSignatureSuccess(tabId: number): Promise<void> {
+  const startTime = Date.now();
+  let latestProbes: Array<MobileSignFrameProbe & { frameId: number }> = [];
+
+  while (Date.now() - startTime < 10 * 60 * 1000) {
+    latestProbes = await probeMobileSignFrames(tabId);
+
+    if (latestProbes.some((probe) => probe.hasSuccess)) {
+      console.log("移动端签字成功弹窗已出现", summarizeMobileSignFrames(latestProbes));
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  throw new Error(
+    `等待移动端签字成功弹窗超时：${summarizeMobileSignFrames(latestProbes)}`
+  );
+}
+
 async function executeMobileSignScript(
   tabId: number,
   signatureMode: SignatureMode,
   signatureNames: string[],
-  signatureFonts: SignatureFontConfig[],
-  skeletonConfig: SkeletonSignatureConfig,
-  autoSignatureMode: AutoSignatureMode
+  autoSignatureMode: AutoSignatureMode,
+  signatureMedians: SignatureMedianEntry[]
 ): Promise<void> {
-  if (signatureMode === "auto") {
-    await browser.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      files: ["opentype.min.js"],
-    });
-  }
-
+  const target = await getMobileSignScriptTarget(tabId, signatureMode);
   const results = await browser.scripting.executeScript({
-    target: { tabId, allFrames: true },
+    target,
     func: mobileSignAutomation,
-    args: [
-      signatureMode,
-      signatureNames,
-      signatureFonts,
-      skeletonConfig,
-      autoSignatureMode,
-    ],
+    args: [signatureMode, signatureNames, autoSignatureMode, signatureMedians],
   });
 
   const values = results.map((result) => result?.result) as Array<
@@ -194,26 +377,14 @@ async function openMobileSignPage(
     await setupMobileEnvironment(debuggee);
     await browser.tabs.update(tab.id, { url: payload.url });
     await waitForTabComplete(tab.id);
-    const signatureFonts = (payload.signatureFonts || []).map((font) => ({
-      ...font,
-      path: /^https?:\/\//.test(font.path)
-        ? font.path
-        : browser.runtime.getURL(font.path.replace(/^\/+/, "") as any),
-    }));
     await executeMobileSignScript(
       tab.id,
       payload.signatureMode || "auto",
       payload.signatureNames || [],
-      signatureFonts,
-      payload.skeletonConfig || {
-        fontSize: 240,
-        scaleX: 84,
-        slant: 17,
-        sampleDensity: 8,
-        jitter: 1,
-      },
-      payload.autoSignatureMode || "skeleton-strokes"
+      payload.autoSignatureMode || "hanzi-medians",
+      payload.signatureMedians || []
     );
+    await waitForMobileSignatureSuccess(tab.id);
     await browser.tabs.remove(tab.id);
     return { success: true, data: null };
   } finally {
@@ -252,38 +423,31 @@ export default defineBackground(() => {
 function mobileSignAutomation(
   signatureMode: "manual" | "auto" = "auto",
   signatureNames: string[] = [],
-  signatureFonts: Array<{ name: string; path: string }> = [],
-  skeletonConfig: {
-    fontSize: number;
-    scaleX: number;
-    slant: number;
-    sampleDensity: number;
-    jitter: number;
-  } = {
-    fontSize: 240,
-    scaleX: 84,
-    slant: 17,
-    sampleDensity: 8,
-    jitter: 1,
-  },
-  autoSignatureMode: "skeleton-strokes" = "skeleton-strokes"
-): Promise<
-  MobileSignScriptResult
-> {
-  type Point = [number, number];
+  autoSignatureMode: "hanzi-medians" = "hanzi-medians",
+  signatureMedians: Array<{
+    name: string;
+    chars: string[];
+    dataByChar: Record<string, { medians: Array<Array<[number, number]>> }>;
+  }> = []
+): Promise<MobileSignScriptResult> {
   type ShapePoint = { x: number; y: number };
-  type Stroke = Point[];
-  type StrokeEventType = "start" | "move" | "end";
+  type HanziMedian = Array<[number, number]>;
+  type HanziData = { medians: HanziMedian[] };
   type EventWindow = Window & typeof globalThis;
-  type OpenTypeFont = {
-    charToGlyph(char: string): { index?: number };
-    getPath(text: string, x: number, y: number, fontSize: number): {
-      commands: Array<Record<string, number | string>>;
-    };
+  type StrokeEventType = "start" | "move" | "end";
+  type PlaybackPoint = ShapePoint & { delay: number };
+  type PlaybackStroke = {
+    char: string;
+    charIndex: number;
+    points: PlaybackPoint[];
+    pauseAfter: number;
+    length: number;
   };
-  type OpenTypeApi = {
-    parse(buffer: ArrayBuffer): OpenTypeFont;
-  };
+
+  const HANZI_SPACE = 1024;
+  const BASE_POINT_STEP = 6;
+  const BASE_MOVE_DELAY = 8;
+  const HUMAN_STRENGTH = 0.65;
 
   const SELECTORS = {
     positionButton: ".ax-pdf-overlay-position-btn",
@@ -292,9 +456,9 @@ function mobileSignAutomation(
     signatureEntry:
       ".overlay-elem.required.overlay-elem-img, .img-sign-wrapper, [class*='img-sign'], [class*='sign-wrapper'], [class*='signWrapper'], .element-wrapper",
     signatureBoard:
-      ".ax-sign-free-svg, .ax-sign-svg, .ax-writing-board-content .view, .ax-writing-board-content",
+      ".listener, .ax-sign-free-svg, .ax-sign-svg, .ax-writing-board-content .view, .ax-writing-board-content",
     signatureContainer:
-      ".van-popup, .van-dialog, .signature, .sign, [class*='sign'], [class*='Signature']",
+      ".van-popup, .van-dialog, .signature, .sign, [class*='sign'], [class*='Signature'], .h5-sign-board, .signView, .sign-view",
     clickable: "button, .van-button, [role='button'], a, div, span",
   };
   const TEXT = {
@@ -306,24 +470,72 @@ function mobileSignAutomation(
     maxSignaturePositions: 12,
     focusTimeout: 3000,
     countDecreaseTimeout: 8000,
-    pageReadyTimeout: 30000,
+    pageReadyTimeout: 90000,
     manualSignatureTimeout: 10 * 60 * 1000,
     manualSuccessTimeout: 10 * 60 * 1000,
     submitButtonTimeout: 15000,
-    submitSettleDelay: 5000,
-    initialDelay: 3000,
-  };
-  const STROKE_LIMITS = {
-    pressureMin: 0.01,
-    pressureMax: 0.05,
-    moveDelayMin: 3,
-    moveDelayMax: 8,
+    submitSettleDelay: 1000,
+    initialDelay: 1500,
   };
 
   const wait = (duration: number) =>
     new Promise((resolve) => window.setTimeout(resolve, duration));
 
   const normalizeText = (text?: string | null) => (text || "").replace(/\s+/g, "");
+
+  const clamp = (value: number, min: number, max: number): number =>
+    Math.min(max, Math.max(min, value));
+
+  const randomBetween = (random: () => number, min: number, max: number): number =>
+    min + (max - min) * random();
+
+  const hashString = (value: string): number => {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  };
+
+  const createRandom = (seed: number) => {
+    let state = seed >>> 0;
+    return () => {
+      state += 0x6d2b79f5;
+      let value = state;
+      value = Math.imul(value ^ (value >>> 15), value | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+
+  const pointDistance = (left: ShapePoint, right: ShapePoint): number =>
+    Math.hypot(right.x - left.x, right.y - left.y);
+
+  const strokeLength = (points: ShapePoint[]): number => {
+    let length = 0;
+    for (let index = 1; index < points.length; index += 1) {
+      length += pointDistance(points[index - 1], points[index]);
+    }
+    return length;
+  };
+
+  const angleChange = (
+    previous: ShapePoint | undefined,
+    current: ShapePoint,
+    next: ShapePoint | undefined
+  ): number => {
+    if (!previous || !next) return 0;
+    const ax = current.x - previous.x;
+    const ay = current.y - previous.y;
+    const bx = next.x - current.x;
+    const by = next.y - current.y;
+    const leftLength = Math.hypot(ax, ay);
+    const rightLength = Math.hypot(bx, by);
+    if (!leftLength || !rightLength) return 0;
+    const cosine = clamp((ax * bx + ay * by) / (leftLength * rightLength), -1, 1);
+    return Math.acos(cosine);
+  };
 
   const getSearchDocuments = (): Document[] => {
     const documents: Document[] = [document];
@@ -371,6 +583,45 @@ function mobileSignAutomation(
 
   const getElementText = (element: Element) =>
     normalizeText(element.textContent || "");
+
+  const clickElement = (element: HTMLElement) => {
+    element.scrollIntoView({ block: "center", inline: "center" });
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const elementWindow = getElementWindow(element);
+
+    if (typeof elementWindow.PointerEvent === "function") {
+      for (const type of ["pointerdown", "pointerup"]) {
+        element.dispatchEvent(
+          new elementWindow.PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            button: 0,
+            buttons: type === "pointerup" ? 0 : 1,
+            pointerId: 1,
+            pointerType: "pen",
+            isPrimary: true,
+            pressure: type === "pointerup" ? 0 : 0.45,
+          })
+        );
+      }
+    }
+
+    for (const type of ["mousedown", "mouseup", "click"]) {
+      element.dispatchEvent(
+        new elementWindow.MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+        })
+      );
+    }
+    element.click();
+  };
 
   const findClickableByText = (
     texts: string[],
@@ -494,44 +745,24 @@ function mobileSignAutomation(
     return getPositionCount();
   };
 
-  const clickElement = (element: HTMLElement) => {
-    element.scrollIntoView({ block: "center", inline: "center" });
-    const rect = element.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    const elementWindow = getElementWindow(element);
-    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
-      element.dispatchEvent(
-        new elementWindow.MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          clientX: x,
-          clientY: y,
-        })
-      );
-    }
-    element.click();
-  };
-
   const findSignatureBoardTarget = (): HTMLElement | undefined => {
-    // 第一步：优先选择 SDK 真正接收笔迹事件的 SVG 节点。
     const boardCandidates = queryAll<HTMLElement>(SELECTORS.signatureBoard)
       .filter(isVisible)
       .map((element) => {
         const rect = element.getBoundingClientRect();
         const className = element.className.toString();
+        const isListener = className.split(/\s+/).includes("listener");
         const isSvgBoard =
           className.includes("ax-sign-free-svg") || className.includes("ax-sign-svg");
 
         return {
           element,
           rect,
-          priority: isSvgBoard ? 0 : 1,
+          priority: isListener ? 0 : isSvgBoard ? 1 : 2,
         };
       })
       .filter(({ rect }) => rect.width >= 20 && rect.height >= 20)
       .sort((left, right) => {
-        // 第二步：同等优先级下选择面积更大的可见签字板，避免选到内部碎片节点。
         const leftArea = left.rect.width * left.rect.height;
         const rightArea = right.rect.width * right.rect.height;
         return left.priority - right.priority || rightArea - leftArea;
@@ -541,11 +772,9 @@ function mobileSignAutomation(
   };
 
   const topSignTarget = (): HTMLElement => {
-    // 第一步：如果页面已打开 SDK 签字板，直接使用真实签字板作为坐标参照。
     const board = findSignatureBoardTarget();
     if (board) return board;
 
-    // 第二步：找不到 SDK 签字板时，保留旧的宽泛容器作为兜底。
     const dialog = queryAll<HTMLElement>(SELECTORS.signatureContainer)
       .filter(isVisible)
       .sort((left, right) => {
@@ -557,48 +786,281 @@ function mobileSignAutomation(
     return dialog || findPositionButton()?.ownerDocument.body || document.body;
   };
 
-  const randomBetween = (min: number, max: number): number =>
-    min + Math.random() * (max - min);
+  const getTargetDrawingBox = (target: HTMLElement) => {
+    const rect = target.getBoundingClientRect();
+    const minX = rect.left + rect.width * 0.12;
+    const maxX = rect.left + rect.width * 0.88;
+    const centerY = rect.top + rect.height * 0.46;
+    const safeHeight = rect.height * 0.22;
 
-  const clamp = (value: number, min: number, max: number): number =>
-    Math.min(max, Math.max(min, value));
+    return {
+      minX,
+      maxX,
+      minY: centerY - safeHeight / 2,
+      maxY: centerY + safeHeight / 2,
+    };
+  };
 
-  const quadraticPoint = (
-    start: Point,
-    control: Point,
-    end: Point,
-    ratio: number
-  ): Point => {
-    const inverse = 1 - ratio;
-    return [
-      inverse * inverse * start[0] + 2 * inverse * ratio * control[0] + ratio * ratio * end[0],
-      inverse * inverse * start[1] + 2 * inverse * ratio * control[1] + ratio * ratio * end[1],
-    ];
+  const getPointBounds = (strokes: Array<{ points: ShapePoint[] }>) => {
+    const points = strokes.flatMap((stroke) => stroke.points);
+    return points.reduce(
+      (bounds, point) => ({
+        minX: Math.min(bounds.minX, point.x),
+        maxX: Math.max(bounds.maxX, point.x),
+        minY: Math.min(bounds.minY, point.y),
+        maxY: Math.max(bounds.maxY, point.y),
+      }),
+      { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+    );
+  };
+
+  const layoutHanziMedians = (
+    target: HTMLElement,
+    entries: Array<{ char: string; data: HanziData }>,
+    random: () => number,
+    humanStrength: number
+  ) => {
+    const gapRatio = 0.08;
+    const rawStrokes: Array<{ char: string; charIndex: number; points: ShapePoint[] }> = [];
+    const charLayouts = entries.map((entry, charIndex) => {
+      const sizeNoise = (random() - 0.5) * 0.06 * humanStrength;
+      const baselineNoise = (random() - 0.5) * 44 * humanStrength;
+      const gapNoise = charIndex < entries.length - 1 ? (random() - 0.5) * 90 * humanStrength : 0;
+
+      return {
+        entry,
+        charIndex,
+        size: HANZI_SPACE * (1 + sizeNoise),
+        baseline: baselineNoise,
+        gapAfter: HANZI_SPACE * gapRatio + gapNoise,
+      };
+    });
+
+    let cursorX = 0;
+    for (const { entry, charIndex, size, baseline, gapAfter } of charLayouts) {
+      const scale = size / HANZI_SPACE;
+      for (const median of entry.data.medians) {
+        rawStrokes.push({
+          char: entry.char,
+          charIndex,
+          points: median.map(([x, y]) => ({
+            x: cursorX + x * scale,
+            y: (HANZI_SPACE - y) * scale + baseline,
+          })),
+        });
+      }
+      cursorX += size + gapAfter;
+    }
+
+    const sourceBounds = getPointBounds(rawStrokes);
+    const sourceWidth = Math.max(1, sourceBounds.maxX - sourceBounds.minX);
+    const sourceHeight = Math.max(1, sourceBounds.maxY - sourceBounds.minY);
+    const box = getTargetDrawingBox(target);
+    const targetWidth = Math.max(1, box.maxX - box.minX);
+    const targetHeight = Math.max(1, box.maxY - box.minY);
+    const scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight) * 0.94;
+    const fittedWidth = sourceWidth * scale;
+    const fittedHeight = sourceHeight * scale;
+    const offsetX = box.minX + (targetWidth - fittedWidth) / 2;
+    const offsetY = box.minY + (targetHeight - fittedHeight) / 2;
+
+    return rawStrokes.map((stroke) => ({
+      ...stroke,
+      points: stroke.points.map((point) => ({
+        x: clamp(offsetX + (point.x - sourceBounds.minX) * scale, box.minX, box.maxX),
+        y: clamp(offsetY + (point.y - sourceBounds.minY) * scale, box.minY, box.maxY),
+      })),
+    }));
+  };
+
+  const resampleStrokeDynamic = (points: ShapePoint[], baseStep: number): ShapePoint[] => {
+    if (points.length <= 1) return points;
+    const totalLength = strokeLength(points);
+    const lengthFactor =
+      totalLength > 150 ? 0.72 : totalLength > 90 ? 0.86 : totalLength < 38 ? 1.45 : 1;
+    const sampled = [points[0]];
+
+    for (let index = 1; index < points.length; index += 1) {
+      const previous = points[index - 1];
+      const current = points[index];
+      const distance = pointDistance(previous, current);
+      const curve = angleChange(points[index - 2], previous, current);
+      const curveFactor = 1 - Math.min(0.38, (curve / Math.PI) * 0.7);
+      const step = Math.max(2, baseStep * lengthFactor * curveFactor);
+      const segments = Math.max(1, Math.ceil(distance / step));
+
+      for (let segment = 1; segment <= segments; segment += 1) {
+        const ratio = segment / segments;
+        sampled.push({
+          x: previous.x + (current.x - previous.x) * ratio,
+          y: previous.y + (current.y - previous.y) * ratio,
+        });
+      }
+    }
+
+    return sampled;
+  };
+
+  const applyDirectionalJitter = (
+    points: ShapePoint[],
+    random: () => number,
+    humanStrength: number
+  ): ShapePoint[] => {
+    if (humanStrength <= 0 || points.length <= 2) return points;
+    const totalLength = strokeLength(points);
+    const lengthRatio = clamp(totalLength / 170, 0, 1);
+    const baseJitter = (0.3 + lengthRatio * 0.9) * humanStrength;
+
+    return points.map((point, index) => {
+      if (index === 0 || index === points.length - 1) {
+        return point;
+      }
+
+      const previous = points[index - 1];
+      const next = points[index + 1];
+      const dx = next.x - previous.x;
+      const dy = next.y - previous.y;
+      const distance = Math.hypot(dx, dy) || 1;
+      const tangentX = dx / distance;
+      const tangentY = dy / distance;
+      const normalX = -tangentY;
+      const normalY = tangentX;
+      const curve = angleChange(previous, point, next);
+      const curveGuard = 1 - Math.min(0.55, curve / Math.PI);
+      const endpointGuard = Math.sin((index / (points.length - 1)) * Math.PI);
+      const amount = baseJitter * curveGuard * (0.45 + endpointGuard * 0.55);
+      const normalNoise = randomBetween(random, -amount, amount);
+      const tangentNoise = randomBetween(random, -amount * 0.28, amount * 0.28);
+
+      return {
+        x: point.x + normalX * normalNoise + tangentX * tangentNoise,
+        y: point.y + normalY * normalNoise + tangentY * tangentNoise,
+      };
+    });
+  };
+
+  const enrichStrokeTiming = (
+    strokes: Array<{ char: string; charIndex: number; points: ShapePoint[] }>,
+    baseDelay: number,
+    humanStrength: number
+  ): PlaybackStroke[] => {
+    return strokes.map((stroke, index) => {
+      const points = stroke.points;
+      const length = strokeLength(points);
+      const next = strokes[index + 1];
+      const nextSameChar = next && next.charIndex === stroke.charIndex;
+      const pauseAfter = !next
+        ? 0
+        : nextSameChar
+          ? Math.round((28 + Math.min(42, length * 0.12)) * (0.65 + humanStrength * 0.7))
+          : Math.round((110 + Math.min(80, length * 0.2)) * (0.75 + humanStrength * 0.8));
+      const minDelay = Math.max(0, baseDelay * 0.45);
+      const maxDelay = baseDelay * (1.5 + humanStrength * 0.9);
+      const playbackPoints = points.map((point, pointIndex) => {
+        if (pointIndex === 0) {
+          return { ...point, delay: 0 };
+        }
+
+        const ratio = pointIndex / Math.max(1, points.length - 1);
+        const endSlowdown = Math.pow(Math.abs(ratio - 0.5) * 2, 1.7);
+        const curve = angleChange(points[pointIndex - 2], points[pointIndex - 1], points[pointIndex]);
+        const curveDelay = (curve / Math.PI) * baseDelay * 1.4 * humanStrength;
+
+        return {
+          ...point,
+          delay: Math.round(minDelay + (maxDelay - minDelay) * endSlowdown + curveDelay),
+        };
+      });
+
+      return {
+        char: stroke.char,
+        charIndex: stroke.charIndex,
+        points: playbackPoints,
+        pauseAfter,
+        length: Math.round(length),
+      };
+    });
+  };
+
+  const createHanziSignatureStrokes = async (
+    target: HTMLElement,
+    name: string,
+    signatureIndex: number
+  ): Promise<PlaybackStroke[]> => {
+    const entry = signatureMedians[signatureIndex];
+    if (!entry) {
+      throw new Error(`没有找到第 ${signatureIndex + 1} 个签名的 Hanzi medians 数据`);
+    }
+
+    const chars = Array.isArray(entry.chars)
+      ? entry.chars.filter((char) => /\S/.test(char))
+      : [...name.trim()].filter((char) => /\S/.test(char));
+    if (!chars.length) {
+      throw new Error("签名姓名为空，降级为人工签字");
+    }
+
+    const random = createRandom(hashString(`${chars.join("")}|hanzi-medians-v1`));
+    const entries = chars.map((char) => {
+      const data = entry.dataByChar?.[char];
+      if (!data || !Array.isArray(data.medians) || !data.medians.length) {
+        throw new Error(`没有找到“${char}”的 Hanzi medians 数据`);
+      }
+      return { char, data };
+    });
+    const pointStrokes = layoutHanziMedians(target, entries, random, HUMAN_STRENGTH)
+      .map((stroke) => ({
+        ...stroke,
+        points: applyDirectionalJitter(
+          resampleStrokeDynamic(stroke.points, BASE_POINT_STEP),
+          random,
+          HUMAN_STRENGTH
+        ),
+      }))
+      .filter((stroke) => stroke.points.length > 1);
+
+    if (!pointStrokes.length) {
+      throw new Error(`没有生成有效 Hanzi medians 签名：${name}`);
+    }
+
+    return enrichStrokeTiming(pointStrokes, BASE_MOVE_DELAY, HUMAN_STRENGTH);
   };
 
   const dispatchStrokeEvent = (
     type: StrokeEventType,
     target: HTMLElement,
-    x: number,
-    y: number,
+    point: ShapePoint,
     pointerId: number,
     force: number
   ): void => {
-    const targetDocument = target.ownerDocument;
-    const targetWindow = (targetDocument.defaultView || window) as EventWindow;
+    const targetWindow = getElementWindow(target);
     const pointerType =
       type === "start" ? "pointerdown" : type === "move" ? "pointermove" : "pointerup";
     const mouseType =
       type === "start" ? "mousedown" : type === "move" ? "mousemove" : "mouseup";
+    const touchType =
+      type === "start" ? "touchstart" : type === "move" ? "touchmove" : "touchend";
+    const touchPoint = {
+      identifier: pointerId,
+      target,
+      clientX: point.x,
+      clientY: point.y,
+      pageX: point.x + targetWindow.scrollX,
+      pageY: point.y + targetWindow.scrollY,
+      screenX: point.x,
+      screenY: point.y,
+      radiusX: 0.2,
+      radiusY: 0.2,
+      rotationAngle: 0,
+      force,
+    };
 
-    // 第一步：签字 SDK 会用事件目标 SVG 的 CTM/边界计算坐标，因此事件必须直接派发给真实签字板。
     if (typeof targetWindow.PointerEvent === "function") {
       target.dispatchEvent(
         new targetWindow.PointerEvent(pointerType, {
           bubbles: true,
           cancelable: true,
-          clientX: x,
-          clientY: y,
+          clientX: point.x,
+          clientY: point.y,
           width: 0.2,
           height: 0.2,
           button: 0,
@@ -609,626 +1071,59 @@ function mobileSignAutomation(
           pressure: type === "end" ? 0 : force,
         })
       );
-      return;
     }
 
-    // 第二步：极少数环境没有 PointerEvent 时，退回到鼠标事件，避免完全无法签字。
     target.dispatchEvent(
       new targetWindow.MouseEvent(mouseType, {
         bubbles: true,
         cancelable: true,
-        clientX: x,
-        clientY: y,
+        clientX: point.x,
+        clientY: point.y,
         button: 0,
         buttons: type === "end" ? 0 : 1,
       })
     );
-  };
 
-  const CANVAS_SPACE = 1000;
-  const VIRTUAL_CANVAS = {
-    width: 960,
-    height: 360,
-  };
-  const fontCache = new Map<string, OpenTypeFont>();
-
-  const getOpenType = (): OpenTypeApi => {
-    const api = (window as unknown as { opentype?: OpenTypeApi }).opentype;
-    if (!api) {
-      throw new Error("opentype.js 未加载，无法生成字体骨架签名");
+    try {
+      target.dispatchEvent(
+        new targetWindow.TouchEvent(touchType, {
+          bubbles: true,
+          cancelable: true,
+          touches: type === "end" ? [] : [new targetWindow.Touch(touchPoint)],
+          targetTouches: type === "end" ? [] : [new targetWindow.Touch(touchPoint)],
+          changedTouches: [new targetWindow.Touch(touchPoint)],
+        })
+      );
+    } catch {
     }
-    return api;
   };
 
-  const loadFont = async (fontConfig: { name: string; path: string }): Promise<OpenTypeFont> => {
-    const cached = fontCache.get(fontConfig.path);
-    if (cached) return cached;
-
-    const response = await fetch(fontConfig.path);
-    if (!response.ok) {
-      throw new Error(`字体加载失败：${fontConfig.name}`);
-    }
-
-    const font = getOpenType().parse(await response.arrayBuffer());
-    fontCache.set(fontConfig.path, font);
-    return font;
-  };
-
-  const fontSupportsName = (font: OpenTypeFont, name: string): boolean => {
-    return Array.from(name).every((char) => {
-      const glyph = font.charToGlyph(char);
-      return glyph && glyph.index !== 0;
-    });
-  };
-
-  const pickFontForName = async (name: string): Promise<OpenTypeFont> => {
-    if (!name) {
-      throw new Error("签名姓名为空，降级为人工签字");
-    }
-
-    if (!signatureFonts.length) {
-      throw new Error("未配置签名字体，降级为人工签字");
-    }
-
-    const usableFonts: OpenTypeFont[] = [];
-    for (const fontConfig of signatureFonts) {
-      const font = await loadFont(fontConfig);
-      if (fontSupportsName(font, name)) {
-        usableFonts.push(font);
-      }
-    }
-
-    if (!usableFonts.length) {
-      throw new Error(`字体库缺少签名文字：${name}`);
-    }
-
-    return usableFonts[Math.floor(Math.random() * usableFonts.length)];
-  };
-
-  const commandPoint = (command: Record<string, number | string>, key: string): number =>
-    Number(command[key] || 0);
-
-  const cubicShapePoint = (
-    start: ShapePoint,
-    controlA: ShapePoint,
-    controlB: ShapePoint,
-    end: ShapePoint,
-    ratio: number
-  ): ShapePoint => {
-    const inverse = 1 - ratio;
-    return {
-      x:
-        inverse * inverse * inverse * start.x +
-        3 * inverse * inverse * ratio * controlA.x +
-        3 * inverse * ratio * ratio * controlB.x +
-        ratio * ratio * ratio * end.x,
-      y:
-        inverse * inverse * inverse * start.y +
-        3 * inverse * inverse * ratio * controlA.y +
-        3 * inverse * ratio * ratio * controlB.y +
-        ratio * ratio * ratio * end.y,
-    };
-  };
-
-  const quadraticShapePoint = (
-    start: ShapePoint,
-    control: ShapePoint,
-    end: ShapePoint,
-    ratio: number
-  ): ShapePoint => {
-    const inverse = 1 - ratio;
-    return {
-      x: inverse * inverse * start.x + 2 * inverse * ratio * control.x + ratio * ratio * end.x,
-      y: inverse * inverse * start.y + 2 * inverse * ratio * control.y + ratio * ratio * end.y,
-    };
-  };
-
-  const pathToContours = (
-    path: { commands: Array<Record<string, number | string>> },
-    samplesPerCurve: number
-  ): ShapePoint[][] => {
-    const contours: ShapePoint[][] = [];
-    let current: ShapePoint[] | null = null;
-    let cursor: ShapePoint = { x: 0, y: 0 };
-    let start: ShapePoint | null = null;
-
-    for (const command of path.commands) {
-      if (command.type === "M") {
-        current = [{ x: commandPoint(command, "x"), y: commandPoint(command, "y") }];
-        contours.push(current);
-        cursor = current[0];
-        start = cursor;
-      } else if (command.type === "L" && current) {
-        cursor = { x: commandPoint(command, "x"), y: commandPoint(command, "y") };
-        current.push(cursor);
-      } else if (command.type === "C" && current) {
-        const end = { x: commandPoint(command, "x"), y: commandPoint(command, "y") };
-        for (let index = 1; index <= samplesPerCurve; index += 1) {
-          current.push(
-            cubicShapePoint(
-              cursor,
-              { x: commandPoint(command, "x1"), y: commandPoint(command, "y1") },
-              { x: commandPoint(command, "x2"), y: commandPoint(command, "y2") },
-              end,
-              index / samplesPerCurve
-            )
-          );
-        }
-        cursor = end;
-      } else if (command.type === "Q" && current) {
-        const end = { x: commandPoint(command, "x"), y: commandPoint(command, "y") };
-        for (let index = 1; index <= samplesPerCurve; index += 1) {
-          current.push(
-            quadraticShapePoint(
-              cursor,
-              { x: commandPoint(command, "x1"), y: commandPoint(command, "y1") },
-              end,
-              index / samplesPerCurve
-            )
-          );
-        }
-        cursor = end;
-      } else if (command.type === "Z" && current && start) {
-        current.push({ ...start });
-      }
-    }
-
-    return contours.filter((contour) => contour.length > 1);
-  };
-
-  const getShapeBounds = (contours: ShapePoint[][]) => {
-    const points = contours.flat();
-    return points.reduce(
-      (bounds, point) => ({
-        minX: Math.min(bounds.minX, point.x),
-        maxX: Math.max(bounds.maxX, point.x),
-        minY: Math.min(bounds.minY, point.y),
-        maxY: Math.max(bounds.maxY, point.y),
-      }),
-      { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
-    );
-  };
-
-  const transformContours = (contours: ShapePoint[][]): ShapePoint[][] => {
-    const bounds = getShapeBounds(contours);
-    const sourceWidth = Math.max(1, bounds.maxX - bounds.minX);
-    const sourceHeight = Math.max(1, bounds.maxY - bounds.minY);
-    const padding = 52;
-    const targetWidth = VIRTUAL_CANVAS.width - padding * 2;
-    const targetHeight = VIRTUAL_CANVAS.height - padding * 2;
-    const fitScale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
-    const scaleX = skeletonConfig.scaleX / 100;
-    const slant = skeletonConfig.slant / 100;
-    const jitter = skeletonConfig.jitter;
-    const fittedWidth = sourceWidth * fitScale * scaleX;
-    const fittedHeight = sourceHeight * fitScale;
-    const offsetX = (VIRTUAL_CANVAS.width - fittedWidth) / 2;
-    const offsetY = (VIRTUAL_CANVAS.height - fittedHeight) / 2;
-
-    return contours.map((contour, contourIndex) =>
-      contour.map((point, pointIndex) => {
-        const localX = (point.x - bounds.minX) * fitScale * scaleX;
-        const localY = (point.y - bounds.minY) * fitScale;
-        const baselineShift = (localY - fittedHeight * 0.52) * slant;
-        const noiseSeed = Math.sin((contourIndex + 1) * 31.17 + (pointIndex + 1) * 17.43);
-        const noise = noiseSeed * jitter;
-        return {
-          x: offsetX + localX + baselineShift + noise,
-          y: offsetY + localY + noise * 0.45,
-        };
-      })
-    );
-  };
-
-  const makeCanvasPath = (contours: ShapePoint[][]): Path2D => {
-    const path = new Path2D();
-    for (const contour of contours) {
-      const first = contour[0];
-      path.moveTo(first.x, first.y);
-      for (const point of contour.slice(1)) {
-        path.lineTo(point.x, point.y);
-      }
-      path.closePath();
-    }
-    return path;
-  };
-
-  const rasterizeContours = (contours: ShapePoint[][]) => {
-    const scale = 0.75;
-    const width = Math.ceil(VIRTUAL_CANVAS.width * scale);
-    const height = Math.ceil(VIRTUAL_CANVAS.height * scale);
-    const rasterCanvas = document.createElement("canvas");
-    rasterCanvas.width = width;
-    rasterCanvas.height = height;
-    const rasterContext = rasterCanvas.getContext("2d");
-
-    if (!rasterContext) {
-      throw new Error("无法创建签名骨架栅格画布");
-    }
-
-    rasterContext.save();
-    rasterContext.scale(scale, scale);
-    rasterContext.fillStyle = "#000";
-    rasterContext.fill(makeCanvasPath(contours));
-    rasterContext.restore();
-
-    const imageData = rasterContext.getImageData(0, 0, width, height);
-    const pixels = new Uint8Array(width * height);
-
-    for (let index = 0; index < pixels.length; index += 1) {
-      pixels[index] = imageData.data[index * 4 + 3] > 20 ? 1 : 0;
-    }
-
-    return { pixels, width, height, scale };
-  };
-
-  const skeletonNeighborValues = (pixels: Uint8Array, width: number, x: number, y: number) => {
-    const index = (nx: number, ny: number) => (pixels[ny * width + nx] ? 1 : 0);
-    return [
-      index(x, y - 1),
-      index(x + 1, y - 1),
-      index(x + 1, y),
-      index(x + 1, y + 1),
-      index(x, y + 1),
-      index(x - 1, y + 1),
-      index(x - 1, y),
-      index(x - 1, y - 1),
-    ];
-  };
-
-  const countTransitions = (neighbors: number[]): number => {
-    let transitions = 0;
-    for (let index = 0; index < neighbors.length; index += 1) {
-      if (neighbors[index] === 0 && neighbors[(index + 1) % neighbors.length] === 1) {
-        transitions += 1;
-      }
-    }
-    return transitions;
-  };
-
-  const thinSkeletonPixels = (
-    sourcePixels: Uint8Array,
-    width: number,
-    height: number
-  ): Uint8Array => {
-    const pixels = new Uint8Array(sourcePixels);
-    const maxIterations = 80;
-    let changed = true;
-    let iteration = 0;
-
-    while (changed && iteration < maxIterations) {
-      changed = false;
-
-      for (let pass = 0; pass < 2; pass += 1) {
-        const toRemove: number[] = [];
-
-        for (let y = 1; y < height - 1; y += 1) {
-          for (let x = 1; x < width - 1; x += 1) {
-            const pixelIndex = y * width + x;
-            if (!pixels[pixelIndex]) continue;
-
-            const neighbors = skeletonNeighborValues(pixels, width, x, y);
-            const neighborCount = neighbors.reduce((sum, value) => sum + value, 0);
-            const transitions = countTransitions(neighbors);
-            const [p2, , p4, , p6, , p8] = neighbors;
-            const passCondition =
-              pass === 0
-                ? p2 * p4 * p6 === 0 && p4 * p6 * p8 === 0
-                : p2 * p4 * p8 === 0 && p2 * p6 * p8 === 0;
-
-            if (
-              neighborCount >= 2 &&
-              neighborCount <= 6 &&
-              transitions === 1 &&
-              passCondition
-            ) {
-              toRemove.push(pixelIndex);
-            }
-          }
-        }
-
-        if (toRemove.length) {
-          changed = true;
-          toRemove.forEach((pixelIndex) => {
-            pixels[pixelIndex] = 0;
-          });
-        }
-      }
-
-      iteration += 1;
-    }
-
-    return pixels;
-  };
-
-  const getSkeletonNeighbors = (
-    pixels: Uint8Array,
-    width: number,
-    height: number,
-    x: number,
-    y: number
-  ): ShapePoint[] => {
-    const neighbors: ShapePoint[] = [];
-
-    for (let dy = -1; dy <= 1; dy += 1) {
-      for (let dx = -1; dx <= 1; dx += 1) {
-        if (dx === 0 && dy === 0) continue;
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-        if (pixels[ny * width + nx]) {
-          neighbors.push({ x: nx, y: ny });
-        }
-      }
-    }
-
-    return neighbors;
-  };
-
-  const traceSkeletonPixels = (
-    pixels: Uint8Array,
-    width: number,
-    height: number,
-    scale: number
-  ): ShapePoint[][] => {
-    const visitedEdges = new Set<string>();
-    const key = (point: ShapePoint) => `${point.x},${point.y}`;
-    const edgeKey = (leftPoint: ShapePoint, rightPoint: ShapePoint) => {
-      const left = key(leftPoint);
-      const right = key(rightPoint);
-      return left < right ? `${left}|${right}` : `${right}|${left}`;
-    };
-    const points: ShapePoint[] = [];
-
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        if (pixels[y * width + x]) {
-          points.push({ x, y });
-        }
-      }
-    }
-
-    const degreeOf = (point: ShapePoint) =>
-      getSkeletonNeighbors(pixels, width, height, point.x, point.y).length;
-    const starts = points
-      .filter((point) => degreeOf(point) !== 2)
-      .sort((left, right) => left.x - right.x || left.y - right.y);
-    const allStarts = starts.length ? starts : points.sort((left, right) => left.x - right.x || left.y - right.y);
-    const traced: ShapePoint[][] = [];
-
-    const traceFrom = (start: ShapePoint, next: ShapePoint): ShapePoint[] => {
-      const stroke = [start];
-      let previous = start;
-      let current: ShapePoint | undefined = next;
-      visitedEdges.add(edgeKey(start, next));
-
-      while (current) {
-        stroke.push(current);
-        const neighbors: ShapePoint[] = getSkeletonNeighbors(pixels, width, height, current.x, current.y)
-          .filter((neighbor) => key(neighbor) !== key(previous))
-          .filter((neighbor) => !visitedEdges.has(edgeKey(current!, neighbor)));
-
-        if (neighbors.length !== 1) break;
-
-        const following: ShapePoint = neighbors[0];
-        visitedEdges.add(edgeKey(current, following));
-        previous = current;
-        current = following;
-      }
-
-      return stroke;
-    };
-
-    for (const start of allStarts) {
-      const neighbors = getSkeletonNeighbors(pixels, width, height, start.x, start.y)
-        .filter((neighbor) => !visitedEdges.has(edgeKey(start, neighbor)))
-        .sort((left, right) => left.x - right.x || left.y - right.y);
-
-      for (const neighbor of neighbors) {
-        const stroke = traceFrom(start, neighbor);
-        if (stroke.length > 2) {
-          traced.push(stroke);
-        }
-      }
-    }
-
-    return traced.map((stroke) =>
-      stroke.map((point) => ({
-        x: point.x / scale,
-        y: point.y / scale,
-      }))
-    );
-  };
-
-  const pointDistance = (left: ShapePoint, right: ShapePoint): number =>
-    Math.hypot(left.x - right.x, left.y - right.y);
-
-  const pointStrokeLength = (stroke: ShapePoint[]): number => {
-    let length = 0;
-    for (let index = 1; index < stroke.length; index += 1) {
-      length += pointDistance(stroke[index - 1], stroke[index]);
-    }
-    return length;
-  };
-
-  const simplifyPointStroke = (stroke: ShapePoint[]): ShapePoint[] => {
-    const simplified: ShapePoint[] = [];
-    let previous: ShapePoint | null = null;
-    const step = 2;
-
-    stroke.forEach((point, index) => {
-      if (
-        index === 0 ||
-        index === stroke.length - 1 ||
-        !previous ||
-        Math.hypot(point.x - previous.x, point.y - previous.y) >= step
-      ) {
-        simplified.push(point);
-        previous = point;
-      }
-    });
-
-    return simplified;
-  };
-
-  const pruneShortSkeletonStrokes = (strokes: ShapePoint[][]): ShapePoint[][] => {
-    return strokes.filter((stroke) => stroke.length >= 4 && pointStrokeLength(stroke) >= 14);
-  };
-
-  const bridgeSkeletonStrokes = (strokes: ShapePoint[][]): ShapePoint[][] => {
-    const maxBridgeDistance = 22;
-    const merged = strokes.map((stroke) => [...stroke]);
-    let changed = true;
-
-    while (changed) {
-      changed = false;
-
-      outer: for (let leftIndex = 0; leftIndex < merged.length; leftIndex += 1) {
-        const left = merged[leftIndex];
-        const leftStart = left[0];
-        const leftEnd = left[left.length - 1];
-
-        for (let rightIndex = leftIndex + 1; rightIndex < merged.length; rightIndex += 1) {
-          const right = merged[rightIndex];
-          const rightStart = right[0];
-          const rightEnd = right[right.length - 1];
-          const candidates = [
-            { distance: pointDistance(leftEnd, rightStart), stroke: [...left, ...right] },
-            { distance: pointDistance(leftEnd, rightEnd), stroke: [...left, ...right.slice().reverse()] },
-            { distance: pointDistance(leftStart, rightEnd), stroke: [...right, ...left] },
-            { distance: pointDistance(leftStart, rightStart), stroke: [...right.slice().reverse(), ...left] },
-          ].sort((a, b) => a.distance - b.distance);
-
-          if (candidates[0].distance <= maxBridgeDistance) {
-            merged[leftIndex] = candidates[0].stroke;
-            merged.splice(rightIndex, 1);
-            changed = true;
-            break outer;
-          }
-        }
-      }
-    }
-
-    return merged;
-  };
-
-  const getTargetDrawingBox = (target: HTMLElement) => {
-    const rect = target.getBoundingClientRect();
-    const fallbackWidth = Math.min(window.innerWidth * 0.78, 360);
-    const fallbackHeight = Math.min(window.innerHeight * 0.30, 170);
-    const left = rect.width > 20 ? rect.left : (window.innerWidth - fallbackWidth) / 2;
-    const top = rect.height > 20 ? rect.top : window.innerHeight * 0.36;
-    const width = rect.width > 20 ? rect.width : fallbackWidth;
-    const height = rect.height > 20 ? rect.height : fallbackHeight;
-    const safeWidth = width * 0.74;
-    const safeHeight = height * 0.18;
-    const safeLeft = left + width * 0.10;
-    const safeCenterY = top + height * 0.52;
-
-    // 第一步：签字板是竖向显示区域，但签名需要横排，所以只使用中部一条较矮的安全带。
-    return {
-      minX: safeLeft,
-      maxX: safeLeft + safeWidth,
-      minY: safeCenterY - safeHeight / 2,
-      maxY: safeCenterY + safeHeight / 2,
-    };
-  };
-
-  const getPointStrokesBounds = (pointStrokes: ShapePoint[][]) => {
-    const points = pointStrokes.flat();
-    return points.reduce(
-      (bounds, point) => ({
-        minX: Math.min(bounds.minX, point.x),
-        maxX: Math.max(bounds.maxX, point.x),
-        minY: Math.min(bounds.minY, point.y),
-        maxY: Math.max(bounds.maxY, point.y),
-      }),
-      { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
-    );
-  };
-
-  const pointStrokesToTargetStrokes = (
+  const fireStrokeEvents = async (
     target: HTMLElement,
-    pointStrokes: ShapePoint[][]
-  ): Stroke[] => {
-    const box = getTargetDrawingBox(target);
-    const sourceBounds = getPointStrokesBounds(pointStrokes);
-    const sourceWidth = Math.max(1, sourceBounds.maxX - sourceBounds.minX);
-    const sourceHeight = Math.max(1, sourceBounds.maxY - sourceBounds.minY);
-    const targetWidth = Math.max(1, box.maxX - box.minX);
-    const targetHeight = Math.max(1, box.maxY - box.minY);
-    const widthScale = targetWidth / sourceWidth;
-    const heightScale = targetHeight / sourceHeight;
-    const scale = Math.min(widthScale, heightScale) * 0.86;
-    const fittedWidth = sourceWidth * scale;
-    const fittedHeight = sourceHeight * scale;
-    const offsetX = box.minX + Math.max(0, (targetWidth - fittedWidth) * 0.03);
-    const offsetY = box.minY + Math.max(0, (targetHeight - fittedHeight) * 0.5);
-
-    // 第一步：所有点都夹在安全带内，避免 SDK 判断越界后提前结束笔画。
-    return pointStrokes.map((stroke) =>
-      stroke.map((point) => [
-        clamp(offsetX + (point.x - sourceBounds.minX) * scale, box.minX, box.maxX),
-        clamp(offsetY + (point.y - sourceBounds.minY) * scale, box.minY, box.maxY),
-      ])
-    );
-  };
-
-  const createSkeletonSignatureStrokes = async (
-    target: HTMLElement,
-    name: string
-  ): Promise<Stroke[]> => {
-    const font = await pickFontForName(name);
-
-    const path = font.getPath(name, 0, skeletonConfig.fontSize, skeletonConfig.fontSize);
-    const rawContours = pathToContours(path, skeletonConfig.sampleDensity);
-    if (!rawContours.length) {
-      throw new Error(`没有从字体中解析到签名轮廓：${name}`);
-    }
-    const contours = transformContours(rawContours);
-
-    const raster = rasterizeContours(contours);
-    const skeletonPixels = thinSkeletonPixels(raster.pixels, raster.width, raster.height);
-    const traced = traceSkeletonPixels(skeletonPixels, raster.width, raster.height, raster.scale)
-      .map(simplifyPointStroke);
-    const pointStrokes = bridgeSkeletonStrokes(pruneShortSkeletonStrokes(traced))
-      .map(simplifyPointStroke)
-      .sort((left, right) => left[0].x - right[0].x || left[0].y - right[0].y)
-      .filter((stroke) => stroke.length > 2);
-
-    if (!pointStrokes.length) {
-      throw new Error(`没有生成有效签名骨架：${name}`);
-    }
-
-    return pointStrokesToTargetStrokes(target, pointStrokes);
-  };
-
-  const fireStrokeEvents = async (target: HTMLElement, strokes: Stroke[]): Promise<void> => {
+    strokes: PlaybackStroke[]
+  ): Promise<void> => {
     let pointerId = Date.now() % 100000;
 
     for (const stroke of strokes) {
       pointerId += 1;
-      const pressure = randomBetween(STROKE_LIMITS.pressureMin, STROKE_LIMITS.pressureMax);
-      const firstPoint = stroke[0];
-      const lastPoint = stroke[stroke.length - 1];
+      const firstPoint = stroke.points[0];
+      const lastPoint = stroke.points[stroke.points.length - 1];
 
-      dispatchStrokeEvent("start", target, firstPoint[0], firstPoint[1], pointerId, pressure);
-      await wait(randomBetween(20, 45));
+      dispatchStrokeEvent("start", target, firstPoint, pointerId, 0.4);
+      await wait(firstPoint.delay);
 
-      for (const point of stroke.slice(1, -1)) {
-        dispatchStrokeEvent(
-          "move",
-          target,
-          point[0],
-          point[1],
-          pointerId,
-          randomBetween(STROKE_LIMITS.pressureMin, STROKE_LIMITS.pressureMax)
-        );
-        await wait(randomBetween(STROKE_LIMITS.moveDelayMin, STROKE_LIMITS.moveDelayMax));
+      for (const point of stroke.points.slice(1)) {
+        dispatchStrokeEvent("move", target, point, pointerId, 0.5);
+        if (point.delay > 0) {
+          await wait(point.delay);
+        }
       }
 
-      dispatchStrokeEvent("end", target, lastPoint[0], lastPoint[1], pointerId, 0);
-      await wait(randomBetween(90, 180));
+      await wait(12);
+      dispatchStrokeEvent("end", target, lastPoint, pointerId, 0);
+      if (stroke.pauseAfter > 0) {
+        await wait(stroke.pauseAfter);
+      }
     }
   };
 
@@ -1246,24 +1141,37 @@ function mobileSignAutomation(
     const positionCount = await focusNextSignature();
     const signEntry = findSignatureImageEntry();
 
-    if (!signEntry) {
+    if (!signEntry && !findSignatureBoardTarget()) {
       return positionCount <= 0 ? "done" : "manualFallback";
     }
 
-    clickElement(signEntry);
+    if (signEntry) {
+      clickElement(signEntry);
+    }
+
     await waitUntil(
       "signature drawing board",
       () => Boolean(findSignatureBoardTarget()),
       5000,
       100
     ).catch(async () => {
-      // 第一步：部分兜底页面没有 SDK 签字板类名，保留短暂等待后继续使用旧容器策略。
       await wait(600);
     });
     const signTarget = topSignTarget();
     const signatureName = signatureNames[signatureIndex] || "";
-    const strokes = await createSkeletonSignatureStrokes(signTarget, signatureName);
-    await fireStrokeEvents(signTarget, strokes);
+
+    try {
+      const strokes = await createHanziSignatureStrokes(
+        signTarget,
+        signatureName,
+        signatureIndex
+      );
+      await fireStrokeEvents(signTarget, strokes);
+    } catch (error) {
+      console.warn("Hanzi medians 自动签字失败，降级为人工签字", error);
+      return "manualFallback";
+    }
+
     await wait(500);
     await tryConfirmSignature();
     await wait(800);
@@ -1287,9 +1195,19 @@ function mobileSignAutomation(
 
     clickElement(submit);
     await wait(1000);
-    await tryConfirmSignature();
+    if (!hasManualSignatureSuccess()) {
+      await tryConfirmSignature();
+    }
     await wait(SIGN_LIMITS.submitSettleDelay);
     return true;
+  };
+
+  const submitSignedDocumentsOrThrow = async (): Promise<void> => {
+    const submitted = await submitSignedDocuments();
+
+    if (!submitted) {
+      throw new Error("没有找到提交签署按钮");
+    }
   };
 
   const waitForManualSignaturesComplete = async (): Promise<void> => {
@@ -1307,7 +1225,6 @@ function mobileSignAutomation(
       `人工签字等待超时，仍有未完成签字数量：${getPositionCount()}`
     );
   };
-
 
   const waitUntil = async (
     description: string,
@@ -1332,7 +1249,8 @@ function mobileSignAutomation(
       .filter(isVisible)
       .some((element) => {
         const text = getElementText(element);
-        return text.includes("签字成功");
+        console.log(text);
+        return text.includes("成功");
       });
   };
 
@@ -1345,21 +1263,37 @@ function mobileSignAutomation(
     );
   };
 
-  const waitForSignPageReady = async (): Promise<void> => {
-    if (
-      document.querySelector("iframe") &&
-      !findPositionButton() &&
-      !findClickableByText(TEXT.submit)
-    ) {
-      throw new Error(`当前 frame 是签字容器页，跳过等待：${location.href}`);
-    }
+  const hasSignPageReadySignal = (): boolean =>
+    Boolean(
+      findPositionButton() ||
+        findClickableByText(TEXT.submit) ||
+        findSignatureImageEntry() ||
+        findSignatureBoardTarget()
+    );
 
+  const isFrameContainerWithoutSignDom = (): boolean =>
+    Boolean(document.querySelector("iframe")) && !hasSignPageReadySignal();
+
+  const waitForSignPageReady = async (): Promise<"ready" | "skipFrame"> => {
+    if (isFrameContainerWithoutSignDom()) {
+      return "skipFrame";
+    }
+    console.log("移动端签字页等待就绪", location.href);
     await waitUntil(
       "sign page ready",
-      () => Boolean(findPositionButton() || findClickableByText(TEXT.submit)),
+      hasSignPageReadySignal,
       SIGN_LIMITS.pageReadyTimeout,
       300
     );
+
+    console.log("移动端签字页已就绪", {
+      href: location.href,
+      positionCount: getPositionCount(),
+      hasPositionButton: Boolean(findPositionButton()),
+      hasSubmit: Boolean(findClickableByText(TEXT.submit)),
+    });
+
+    return "ready";
   };
 
   return (async () => {
@@ -1378,14 +1312,20 @@ function mobileSignAutomation(
         return { success: true };
       }
 
-      await waitForSignPageReady();
+      const pageReadyStatus = await waitForSignPageReady();
+      if (pageReadyStatus === "skipFrame") {
+        return {
+          success: false,
+          errorMessage: `Skip sign container frame: ${location.href}`,
+        };
+      }
 
-      if (autoSignatureMode !== "skeleton-strokes") {
+      if (autoSignatureMode !== "hanzi-medians") {
         throw new Error(`不支持的自动签名模式：${autoSignatureMode}`);
       }
 
       const initialCount = getPositionCount();
-      if (!findPositionButton() && initialCount <= 0) {
+      if (!findPositionButton() && initialCount <= 0 && !findClickableByText(TEXT.submit)) {
         return {
           success: false,
           errorMessage: `当前 frame 没有瞄准按钮：${location.href}`,
@@ -1400,7 +1340,7 @@ function mobileSignAutomation(
         if (signResult === "done") break;
         if (signResult === "manualFallback") {
           await waitForManualSignaturesComplete();
-          await waitForManualSignatureSuccess();
+          await submitSignedDocumentsOrThrow();
           return { success: true };
         }
         signedCount += 1;
@@ -1415,7 +1355,7 @@ function mobileSignAutomation(
         throw new Error(`仍有未完成签字数量：${getPositionCount()}`);
       }
 
-      await waitForManualSignatureSuccess();
+      await submitSignedDocumentsOrThrow();
 
       return { success: true };
     } catch (error) {

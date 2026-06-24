@@ -105,14 +105,14 @@ function splitPersonNames(text: string): string[] {
 }
 
 function getSignatureNamesFromRow(row: HTMLElement): string[] {
-  // 固定四个签字点顺序：调解员、当事人1、当事人2、调解员。
+  // 固定四个签字点顺序：当事人1、当事人1、当事人2、调解员。
   const partyIndex = findTableHeaderIndex(row, "当事人");
   const mediatorIndex = findTableHeaderIndex(row, "调解员");
   const parties = splitPersonNames(getRowCellText(row, partyIndex));
   const mediator = normalizeCellText(getRowCellText(row, mediatorIndex));
 
   // 自动签字需要两个当事人和一个调解员，缺失时交给后续人工降级处理。
-  return [mediator, parties[0] || "", parties[1] || "", mediator];
+  return [parties[0] || "", parties[0] || "", parties[1] || "", mediator];
 }
 
 export async function openFirstOralCase(): Promise<OralCaseListSelection> {

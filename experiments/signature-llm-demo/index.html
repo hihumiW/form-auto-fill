@@ -331,7 +331,13 @@
         canvas: document.querySelector("#signatureCanvas"),
       };
 
-    
+      const initAPIKey = () => {
+        elements.baseUrlInput.value = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+        elements.modelInput.value = 'qwen3.7-plus';
+        elements.apiKeyInput.value = 'sk-ws-H.RPDYEMY.gEiT.MEQCIAjI_JZ8BKol9U4XBiWGafHGdFY-RHwveia9OVM1rGFXAiBmcJ9BC9zGfl46WPLKKJ8ZKcbfz1po2sKfoJ9PW7mk1Q';
+      }
+
+      initAPIKey();
 
       const context = elements.canvas.getContext("2d");
       let latestStrokes = null;

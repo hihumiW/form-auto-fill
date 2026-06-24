@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hanzi Medians 签字模拟 Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --text: #172033;
+        --muted: #5b667a;
+        --line: #cdd7e6;
+        --line-soft: #e7edf5;
+        --surface: #ffffff;
+        --panel: #f6f8fb;
+        --accent: #1f73d8;
+        --accent-dark: #1559ad;
+        --ink: #111827;
+        --paper: #fffdf8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #eef2f7;
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "Microsoft YaHei", sans-serif;
+      }
+
+      main {
+        width: min(1360px, calc(100vw - 48px));
+        margin: 28px auto;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 30px;
+        line-height: 1.18;
+      }
+
+      .intro {
+        margin: 0 0 22px;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 360px minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: 0 16px 40px rgba(23, 32, 51, 0.08);
+      }
+
+      .controls {
+        padding: 18px;
+      }
+
+      .field {
+        margin-bottom: 16px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      input,
+      button,
+      textarea {
+        font: inherit;
+      }
+
+      input[type="text"],
+      input[type="number"] {
+        width: 100%;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 11px;
+        background: #fff;
+        color: var(--text);
+        font-weight: 650;
+      }
+
+      input[type="range"] {
+        width: 100%;
+      }
+
+      .range-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 76px;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      button {
+        min-height: 42px;
+        border: 1px solid #b7c8de;
+        border-radius: 6px;
+        padding: 8px 13px;
+        background: #fff;
+        color: #0f2038;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+      }
+
+      button.primary:hover {
+        background: var(--accent-dark);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.52;
+      }
+
+      .status {
+        min-height: 22px;
+        margin: 14px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .status.ok {
+        color: #0d7a4d;
+      }
+
+      .status.error {
+        color: #b42318;
+      }
+
+      .preview {
+        padding: 18px;
+      }
+
+      .canvas-shell {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .output-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .section-title {
+        margin: 0 0 8px;
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      pre {
+        height: 230px;
+        margin: 0;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfe;
+        padding: 12px;
+        color: #102033;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      .canvas-events {
+        margin-top: 16px;
+      }
+
+      @media (max-width: 920px) {
+        main {
+          width: min(100vw - 24px, 720px);
+          margin: 18px auto;
+        }
+
+        .layout,
+        .output-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hanzi Medians 签字模拟 Demo</h1>
+      <p class="intro">
+        直接使用 Hanzi Writer / Make Me a Hanzi 的 medians，把每一笔中心线映射到签字区域，并按点序列模拟书写。
+      </p>
+
+      <div class="layout">
+        <section class="panel controls">
+          <div class="field">
+            <label for="nameInput">签名姓名</label>
+            <input id="nameInput" type="text" value="曾博铭" autocomplete="off" />
+          </div>
+
+          <div class="field">
+            <label for="pointStepInput">基础点间距</label>
+            <div class="range-row">
+              <input id="pointStepInput" type="range" min="2" max="18" value="6" />
+              <input id="pointStepValue" type="number" min="2" max="18" value="6" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="drawDelayInput">基础速度</label>
+            <div class="range-row">
+              <input id="drawDelayInput" type="range" min="0" max="30" value="8" />
+              <input id="drawDelayValue" type="number" min="0" max="30" value="8" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="humanInput">拟人化强度</label>
+            <div class="range-row">
+              <input id="humanInput" type="range" min="0" max="100" value="65" />
+              <input id="humanValue" type="number" min="0" max="100" value="65" />
+            </div>
+          </div>
+
+          <div class="button-row">
+            <button id="generateButton" type="button" class="primary">生成 medians</button>
+            <button id="replayButton" type="button" disabled>重新回放</button>
+            <button id="copyScriptButton" type="button" disabled>复制注入脚本</button>
+            <button id="clearButton" type="button">清空</button>
+          </div>
+
+          <p id="status" class="status">尚未生成。</p>
+        </section>
+
+        <section class="panel preview">
+          <div class="canvas-shell">
+            <canvas id="signatureCanvas" width="960" height="360"></canvas>
+          </div>
+
+          <div class="output-grid">
+            <div>
+              <p class="section-title">medians strokes</p>
+              <pre id="strokesOutput">尚未生成。</pre>
+            </div>
+            <div>
+              <p class="section-title">注入脚本</p>
+              <pre id="scriptOutput">生成后会输出可复制的 canvas pointer 事件回放脚本。</pre>
+            </div>
+          </div>
+
+          <div class="canvas-events">
+            <p class="section-title">事件日志</p>
+            <pre id="eventOutput">回放时会展示 pointerdown / pointermove / pointerup 摘要。</pre>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const HANZI_SPACE = 1024;
+      const CANVAS_SPACE = 1000;
+      const DATA_URL = "https://cdn.jsdelivr.net/npm/hanzi-writer-data@latest/";
+
+      const elements = {
+        nameInput: document.querySelector("#nameInput"),
+        pointStepInput: document.querySelector("#pointStepInput"),
+        pointStepValue: document.querySelector("#pointStepValue"),
+        drawDelayInput: document.querySelector("#drawDelayInput"),
+        drawDelayValue: document.querySelector("#drawDelayValue"),
+        humanInput: document.querySelector("#humanInput"),
+        humanValue: document.querySelector("#humanValue"),
+        generateButton: document.querySelector("#generateButton"),
+        replayButton: document.querySelector("#replayButton"),
+        copyScriptButton: document.querySelector("#copyScriptButton"),
+        clearButton: document.querySelector("#clearButton"),
+        status: document.querySelector("#status"),
+        canvas: document.querySelector("#signatureCanvas"),
+        strokesOutput: document.querySelector("#strokesOutput"),
+        scriptOutput: document.querySelector("#scriptOutput"),
+        eventOutput: document.querySelector("#eventOutput"),
+      };
+
+      const context = elements.canvas.getContext("2d");
+      let latestCanvasStrokes = [];
+      let latestNormalizedStrokes = [];
+      let latestPlaybackStrokes = [];
+
+      function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+      }
+
+      function hashString(value) {
+        let hash = 2166136261;
+        for (let index = 0; index < value.length; index += 1) {
+          hash ^= value.charCodeAt(index);
+          hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
+      }
+
+      function createRandom(seed) {
+        let state = seed >>> 0;
+        return () => {
+          state += 0x6d2b79f5;
+          let value = state;
+          value = Math.imul(value ^ (value >>> 15), value | 1);
+          value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+          return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      function randomBetween(random, min, max) {
+        return min + (max - min) * random();
+      }
+
+      function setStatus(message, type = "") {
+        elements.status.textContent = message;
+        elements.status.className = `status ${type}`.trim();
+      }
+
+      function syncRange(rangeInput, numberInput) {
+        const apply = (source, target) => {
+          target.value = source.value;
+        };
+        rangeInput.addEventListener("input", () => apply(rangeInput, numberInput));
+        numberInput.addEventListener("input", () => apply(numberInput, rangeInput));
+      }
+
+      function getNameChars() {
+        return [...elements.nameInput.value.trim()].filter((char) => /\S/.test(char));
+      }
+
+      async function fetchCharacterData(char) {
+        const response = await fetch(`${DATA_URL}${encodeURIComponent(char)}.json`);
+        if (!response.ok) {
+          throw new Error(`没有找到“${char}”的 Hanzi medians 数据。`);
+        }
+        const data = await response.json();
+        if (!Array.isArray(data.medians) || data.medians.length === 0) {
+          throw new Error(`“${char}”的数据中没有 medians。`);
+        }
+        return data;
+      }
+
+      function drawGuide() {
+        const width = elements.canvas.width;
+        const height = elements.canvas.height;
+
+        context.clearRect(0, 0, width, height);
+        context.save();
+        context.fillStyle = "#fffdf8";
+        context.fillRect(0, 0, width, height);
+
+        context.strokeStyle = "#eee7dc";
+        context.lineWidth = 1;
+        for (let x = 60; x < width; x += 60) {
+          context.beginPath();
+          context.moveTo(x, 0);
+          context.lineTo(x, height);
+          context.stroke();
+        }
+        for (let y = 60; y < height; y += 60) {
+          context.beginPath();
+          context.moveTo(0, y);
+          context.lineTo(width, y);
+          context.stroke();
+        }
+
+        context.strokeStyle = "#dac8aa";
+        context.setLineDash([8, 8]);
+        context.beginPath();
+        context.moveTo(0, height * 0.68);
+        context.lineTo(width, height * 0.68);
+        context.stroke();
+        context.restore();
+      }
+
+      function pointDistance(left, right) {
+        return Math.hypot(right.x - left.x, right.y - left.y);
+      }
+
+      function strokeLength(points) {
+        let length = 0;
+        for (let index = 1; index < points.length; index += 1) {
+          length += pointDistance(points[index - 1], points[index]);
+        }
+        return length;
+      }
+
+      function angleChange(previous, current, next) {
+        if (!previous || !next) return 0;
+        const ax = current.x - previous.x;
+        const ay = current.y - previous.y;
+        const bx = next.x - current.x;
+        const by = next.y - current.y;
+        const leftLength = Math.hypot(ax, ay);
+        const rightLength = Math.hypot(bx, by);
+        if (!leftLength || !rightLength) return 0;
+        const cosine = clamp((ax * bx + ay * by) / (leftLength * rightLength), -1, 1);
+        return Math.acos(cosine);
+      }
+
+      function layoutMedians(characterEntries, random, humanStrength) {
+        const paddingX = 56;
+        const paddingY = 34;
+        const canvasWidth = elements.canvas.width;
+        const canvasHeight = elements.canvas.height;
+        const count = characterEntries.length;
+        const gapRatio = 0.08;
+        const availableWidth = canvasWidth - paddingX * 2;
+        const availableHeight = canvasHeight - paddingY * 2;
+        const cellSize = Math.min(
+          availableHeight,
+          availableWidth / Math.max(1, count + gapRatio * (count - 1))
+        );
+        const gap = cellSize * gapRatio;
+        const charLayouts = characterEntries.map((entry, charIndex) => {
+          const sizeNoise = (random() - 0.5) * 0.06 * humanStrength;
+          const baselineNoise = (random() - 0.5) * 7 * humanStrength;
+          const gapNoise = charIndex < count - 1 ? (random() - 0.5) * 14 * humanStrength : 0;
+          return {
+            entry,
+            charIndex,
+            size: cellSize * (1 + sizeNoise),
+            baseline: baselineNoise,
+            gapAfter: gap + gapNoise,
+          };
+        });
+        const totalWidth =
+          charLayouts.reduce((sum, item) => sum + item.size + item.gapAfter, 0) -
+          (charLayouts[count - 1]?.gapAfter || 0);
+        const startX = (canvasWidth - totalWidth) / 2;
+        let cursorX = startX;
+
+        return charLayouts.flatMap(({ entry, charIndex, size, baseline, gapAfter }) => {
+          const scale = size / HANZI_SPACE;
+          const offsetX = cursorX;
+          const offsetY = (canvasHeight - size) / 2 + baseline;
+          cursorX += size + gapAfter;
+
+          return entry.data.medians.map((median, strokeIndex) => ({
+            char: entry.char,
+            charIndex,
+            strokeIndex,
+            points: median.map(([x, y]) => ({
+              x: offsetX + x * scale,
+              y: offsetY + (HANZI_SPACE - y) * scale,
+            })),
+          }));
+        });
+      }
+
+      function resampleStrokeDynamic(points, baseStep) {
+        if (points.length <= 1) return points;
+        const totalLength = strokeLength(points);
+        const lengthFactor =
+          totalLength > 150 ? 0.72 : totalLength > 90 ? 0.86 : totalLength < 38 ? 1.45 : 1;
+        const sampled = [points[0]];
+
+        for (let index = 1; index < points.length; index += 1) {
+          const previous = points[index - 1];
+          const current = points[index];
+          const distance = Math.hypot(current.x - previous.x, current.y - previous.y);
+          const curve = angleChange(points[index - 2], previous, current);
+          const curveFactor = 1 - Math.min(0.38, (curve / Math.PI) * 0.7);
+          const step = Math.max(2, baseStep * lengthFactor * curveFactor);
+          const segments = Math.max(1, Math.ceil(distance / step));
+
+          for (let segment = 1; segment <= segments; segment += 1) {
+            const t = segment / segments;
+            sampled.push({
+              x: previous.x + (current.x - previous.x) * t,
+              y: previous.y + (current.y - previous.y) * t,
+            });
+          }
+        }
+
+        return sampled;
+      }
+
+      function applyDirectionalJitter(points, random, humanStrength) {
+        if (humanStrength <= 0 || points.length <= 2) return points;
+        const totalLength = strokeLength(points);
+        const lengthRatio = clamp(totalLength / 170, 0, 1);
+        const baseJitter = (0.3 + lengthRatio * 0.9) * humanStrength;
+
+        return points.map((point, index) => {
+          if (index === 0 || index === points.length - 1) {
+            return point;
+          }
+
+          const previous = points[index - 1];
+          const next = points[index + 1];
+          const dx = next.x - previous.x;
+          const dy = next.y - previous.y;
+          const distance = Math.hypot(dx, dy) || 1;
+          const tangentX = dx / distance;
+          const tangentY = dy / distance;
+          const normalX = -tangentY;
+          const normalY = tangentX;
+          const curve = angleChange(previous, point, next);
+          const curveGuard = 1 - Math.min(0.55, curve / Math.PI);
+          const endpointGuard = Math.sin((index / (points.length - 1)) * Math.PI);
+          const amount = baseJitter * curveGuard * (0.45 + endpointGuard * 0.55);
+          const normalNoise = randomBetween(random, -amount, amount);
+          const tangentNoise = randomBetween(random, -amount * 0.28, amount * 0.28);
+
+          return {
+            x: point.x + normalX * normalNoise + tangentX * tangentNoise,
+            y: point.y + normalY * normalNoise + tangentY * tangentNoise,
+          };
+        });
+      }
+
+      function enrichStrokeTiming(strokes, baseDelay, humanStrength) {
+        return strokes.map((stroke, index) => {
+          const points = stroke.points;
+          const length = strokeLength(points);
+          const next = strokes[index + 1];
+          const nextSameChar = next && next.charIndex === stroke.charIndex;
+          const strokePause = !next
+            ? 0
+            : nextSameChar
+            ? Math.round((28 + Math.min(42, length * 0.12)) * (0.65 + humanStrength * 0.7))
+            : Math.round((110 + Math.min(80, length * 0.2)) * (0.75 + humanStrength * 0.8));
+          const minDelay = Math.max(0, baseDelay * 0.45);
+          const maxDelay = baseDelay * (1.5 + humanStrength * 0.9);
+          const delays = points.map((_, pointIndex) => {
+            if (pointIndex === 0) return 0;
+            const t = pointIndex / Math.max(1, points.length - 1);
+            const endSlowdown = Math.pow(Math.abs(t - 0.5) * 2, 1.7);
+            const curve = angleChange(points[pointIndex - 2], points[pointIndex - 1], points[pointIndex]);
+            const curveDelay = (curve / Math.PI) * baseDelay * 1.4 * humanStrength;
+            return Math.round(minDelay + (maxDelay - minDelay) * endSlowdown + curveDelay);
+          });
+
+          return {
+            ...stroke,
+            length: Math.round(length),
+            pauseAfter: strokePause,
+            delays,
+          };
+        });
+      }
+
+      function toNormalizedStrokes(canvasStrokes) {
+        return canvasStrokes.map((stroke) =>
+          stroke.points.map((point) => [
+            Math.round(clamp((point.x / elements.canvas.width) * CANVAS_SPACE, 0, CANVAS_SPACE)),
+            Math.round(clamp((point.y / elements.canvas.height) * CANVAS_SPACE, 0, CANVAS_SPACE)),
+          ])
+        );
+      }
+
+      function normalizedToCanvas(point, canvas) {
+        return {
+          x: (point[0] / CANVAS_SPACE) * canvas.width,
+          y: (point[1] / CANVAS_SPACE) * canvas.height,
+        };
+      }
+
+      function pointerEventLog(type, point, strokeIndex) {
+        return `${type.padEnd(11)} stroke=${String(strokeIndex + 1).padStart(2, "0")} x=${Math.round(
+          point.x
+        )} y=${Math.round(point.y)}`;
+      }
+
+      function dispatchLocalPointer(type, point) {
+        elements.canvas.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 1,
+            pointerType: "pen",
+            isPrimary: true,
+            clientX: point.x,
+            clientY: point.y,
+            pressure: type === "pointerup" ? 0 : 0.5,
+          })
+        );
+      }
+
+      function drawSegment(from, to) {
+        context.save();
+        context.lineCap = "round";
+        context.lineJoin = "round";
+        context.lineWidth = 5;
+        context.strokeStyle = "#111827";
+        context.beginPath();
+        context.moveTo(from.x, from.y);
+        context.lineTo(to.x, to.y);
+        context.stroke();
+        context.restore();
+      }
+
+      function wait(ms) {
+        return new Promise((resolve) => window.setTimeout(resolve, ms));
+      }
+
+      async function replayStrokes() {
+        if (!latestPlaybackStrokes.length) return;
+        const logs = [];
+
+        drawGuide();
+        elements.replayButton.disabled = true;
+        elements.generateButton.disabled = true;
+
+        try {
+          for (let strokeIndex = 0; strokeIndex < latestPlaybackStrokes.length; strokeIndex += 1) {
+            const stroke = latestPlaybackStrokes[strokeIndex];
+            const points = stroke.points;
+            if (points.length < 2) continue;
+
+            dispatchLocalPointer("pointerdown", points[0]);
+            logs.push(pointerEventLog("pointerdown", points[0], strokeIndex));
+
+            for (let pointIndex = 1; pointIndex < points.length; pointIndex += 1) {
+              drawSegment(points[pointIndex - 1], points[pointIndex]);
+              dispatchLocalPointer("pointermove", points[pointIndex]);
+              if (pointIndex === points.length - 1 || pointIndex % 10 === 0) {
+                logs.push(pointerEventLog("pointermove", points[pointIndex], strokeIndex));
+              }
+              if (stroke.delays[pointIndex] > 0) await wait(stroke.delays[pointIndex]);
+            }
+
+            const last = points[points.length - 1];
+            dispatchLocalPointer("pointerup", last);
+            logs.push(pointerEventLog("pointerup", last, strokeIndex));
+            logs.push(
+              `pause       stroke=${String(strokeIndex + 1).padStart(2, "0")} ms=${stroke.pauseAfter}`
+            );
+            if (stroke.pauseAfter > 0) await wait(stroke.pauseAfter);
+          }
+
+          elements.eventOutput.textContent = logs.join("\n");
+        } finally {
+          elements.replayButton.disabled = false;
+          elements.generateButton.disabled = false;
+        }
+      }
+
+      function toPlaybackPayload(playbackStrokes) {
+        return playbackStrokes.map((stroke) => ({
+          char: stroke.char,
+          charIndex: stroke.charIndex,
+          length: stroke.length,
+          pauseAfter: stroke.pauseAfter,
+          points: stroke.points.map((point, index) => ({
+            x: Math.round(clamp((point.x / elements.canvas.width) * CANVAS_SPACE, 0, CANVAS_SPACE)),
+            y: Math.round(clamp((point.y / elements.canvas.height) * CANVAS_SPACE, 0, CANVAS_SPACE)),
+            delay: stroke.delays[index] || 0,
+          })),
+        }));
+      }
+
+      function buildInjectionScript(playbackPayload) {
+        return `(() => {
+  const strokes = ${JSON.stringify(playbackPayload)};
+  const canvas =
+    document.querySelector("canvas") ||
+    document.querySelector(".signature canvas") ||
+    document.querySelector("[class*='sign'] canvas");
+  if (!canvas) throw new Error("没有找到签字 canvas");
+
+  const rect = canvas.getBoundingClientRect();
+  const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const toClientPoint = (point) => ({
+    clientX: rect.left + (point.x / ${CANVAS_SPACE}) * rect.width,
+    clientY: rect.top + (point.y / ${CANVAS_SPACE}) * rect.height,
+  });
+  const emit = (type, point) => {
+    const pos = toClientPoint(point);
+    canvas.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 1,
+      pointerType: "pen",
+      isPrimary: true,
+      clientX: pos.clientX,
+      clientY: pos.clientY,
+      pressure: type === "pointerup" ? 0 : 0.5,
+    }));
+  };
+
+  (async () => {
+    for (const stroke of strokes) {
+      if (stroke.points.length < 2) continue;
+      emit("pointerdown", stroke.points[0]);
+      for (const point of stroke.points.slice(1)) {
+        emit("pointermove", point);
+        if (point.delay > 0) await wait(point.delay);
+      }
+      emit("pointerup", stroke.points[stroke.points.length - 1]);
+      if (stroke.pauseAfter > 0) await wait(stroke.pauseAfter);
+    }
+    canvas.dispatchEvent(new Event("input", { bubbles: true }));
+    canvas.dispatchEvent(new Event("change", { bubbles: true }));
+  })();
+})();`;
+      }
+
+      async function generate() {
+        const chars = getNameChars();
+        if (!chars.length) {
+          throw new Error("请输入签名姓名。");
+        }
+
+        setStatus("正在加载 Hanzi medians 数据...", "");
+        elements.generateButton.disabled = true;
+        elements.replayButton.disabled = true;
+        elements.copyScriptButton.disabled = true;
+
+        const uniqueChars = [...new Set(chars)];
+        const dataByChar = new Map();
+        for (const char of uniqueChars) {
+          dataByChar.set(char, await fetchCharacterData(char));
+        }
+
+        const entries = chars.map((char) => ({ char, data: dataByChar.get(char) }));
+        const pointStep = Number(elements.pointStepInput.value);
+        const baseDelay = Number(elements.drawDelayInput.value);
+        const humanStrength = Number(elements.humanInput.value) / 100;
+        const random = createRandom(hashString(`${chars.join("")}|${pointStep}|${baseDelay}|${humanStrength}`));
+        latestCanvasStrokes = layoutMedians(entries, random, humanStrength)
+          .map((stroke) => ({
+            ...stroke,
+            points: applyDirectionalJitter(
+              resampleStrokeDynamic(stroke.points, pointStep),
+              random,
+              humanStrength
+            ),
+          }))
+          .filter((stroke) => stroke.points.length > 1);
+        latestPlaybackStrokes = enrichStrokeTiming(latestCanvasStrokes, baseDelay, humanStrength);
+        latestNormalizedStrokes = toNormalizedStrokes(latestCanvasStrokes);
+        const playbackPayload = toPlaybackPayload(latestPlaybackStrokes);
+
+        elements.strokesOutput.textContent = JSON.stringify(
+          {
+            source: "hanzi-writer-data medians + humanized playback",
+            name: chars.join(""),
+            characterCount: chars.length,
+            strokeCount: latestNormalizedStrokes.length,
+            canvasSpace: CANVAS_SPACE,
+            humanization: {
+              dynamicResampling: "length and curvature",
+              jitterPx: humanStrength > 0 ? "0.3-1.2 directional" : "off",
+              timing: "slow start, fast middle, slow finish",
+              pauses: "short within character, longer between characters",
+              layout: "minor size, gap, baseline variation",
+              strength: Number(elements.humanInput.value),
+            },
+            playback: playbackPayload,
+            strokes: latestNormalizedStrokes,
+          },
+          null,
+          2
+        );
+        elements.scriptOutput.textContent = buildInjectionScript(playbackPayload);
+        elements.replayButton.disabled = false;
+        elements.copyScriptButton.disabled = false;
+        setStatus(`已生成 ${chars.length} 个字、${latestNormalizedStrokes.length} 条 stroke。`, "ok");
+        await replayStrokes();
+      }
+
+      async function copyScript() {
+        await navigator.clipboard.writeText(elements.scriptOutput.textContent);
+        setStatus("注入脚本已复制。", "ok");
+      }
+
+      function clearAll() {
+        latestCanvasStrokes = [];
+        latestNormalizedStrokes = [];
+        latestPlaybackStrokes = [];
+        drawGuide();
+        elements.strokesOutput.textContent = "尚未生成。";
+        elements.scriptOutput.textContent = "生成后会输出可复制的 canvas pointer 事件回放脚本。";
+        elements.eventOutput.textContent = "回放时会展示 pointerdown / pointermove / pointerup 摘要。";
+        elements.replayButton.disabled = true;
+        elements.copyScriptButton.disabled = true;
+        setStatus("已清空。", "");
+      }
+
+      function showError(error) {
+        console.error(error);
+        setStatus(error.message || String(error), "error");
+      }
+
+      syncRange(elements.pointStepInput, elements.pointStepValue);
+      syncRange(elements.drawDelayInput, elements.drawDelayValue);
+      syncRange(elements.humanInput, elements.humanValue);
+      drawGuide();
+
+      elements.generateButton.addEventListener("click", () => generate().catch(showError).finally(() => {
+        elements.generateButton.disabled = false;
+      }));
+      elements.replayButton.addEventListener("click", () => replayStrokes().catch(showError));
+      elements.copyScriptButton.addEventListener("click", () => copyScript().catch(showError));
+      elements.clearButton.addEventListener("click", clearAll);
+    </script>
+  </body>
+</html>

@@ -11,7 +11,7 @@ export default defineConfig({
     host_permissions: ["http://*:*/*", "https://*:*/*"],
     web_accessible_resources: [
       {
-        resources: ["jquery.min.js", "opentype.min.js", "signature-fonts/*"],
+        resources: ["jquery.min.js"],
         matches: ["<all_urls>"],
       },
     ],

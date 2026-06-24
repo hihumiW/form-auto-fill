@@ -1,19 +1,17 @@
 export type TriggerType = "applyForm"  | "oralCase";
 export type BackgroundAction = "openMobileSignPage";
 export type SignatureMode = "manual" | "auto";
-export type AutoSignatureMode = "skeleton-strokes";
+export type AutoSignatureMode = "hanzi-medians";
+export type HanziMedian = Array<[number, number]>;
 
-export interface SignatureFontConfig {
-  name: string;
-  path: string;
+export interface HanziData {
+  medians: HanziMedian[];
 }
 
-export interface SkeletonSignatureConfig {
-  fontSize: number;
-  scaleX: number;
-  slant: number;
-  sampleDensity: number;
-  jitter: number;
+export interface SignatureMedianEntry {
+  name: string;
+  chars: string[];
+  dataByChar: Record<string, HanziData>;
 }
 
 export interface ResponseResult<T = null> {
@@ -32,6 +30,5 @@ export interface OpenMobileSignPagePayload {
   signatureMode?: SignatureMode;
   autoSignatureMode?: AutoSignatureMode;
   signatureNames?: string[];
-  signatureFonts?: SignatureFontConfig[];
-  skeletonConfig?: SkeletonSignatureConfig;
+  signatureMedians?: SignatureMedianEntry[];
 }

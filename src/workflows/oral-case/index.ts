@@ -21,6 +21,8 @@ async function ensureProtocolRegisterForm(
 ): Promise<void> {
   if (!isProtocolRegisterPending()) {
     context.log(`口头协议登记表已录入，跳过填写：${caseNumber}`);
+    await wait(500);
+    return 
   }
 
   await openProtocolRegisterForm();
@@ -42,6 +44,7 @@ async function processOneOralCase(
       console.log(caseHeader?.textContent)
       return !!caseHeader?.textContent.includes('正在办理')
   })
+
 
   await ensureProtocolRegisterForm(caseNumber, context);
 

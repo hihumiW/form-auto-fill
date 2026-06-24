@@ -17,9 +17,12 @@ import {
 } from "@/src/browser/dom";
 import { ORAL_CASE_CONFIG } from "@/src/workflows/oral-case/config";
 import {
+  HanziData,
   OpenMobileSignPagePayload,
   RequestAction,
   ResponseResult,
+  SignatureMedianEntry,
+  SignatureMode,
 } from "@/types";
 
 const DEFAULT_MODAL_TIMEOUT = 30000;
@@ -28,6 +31,12 @@ const BUTTON_SELECTOR = "button, .ant-btn";
 const CONFIRM_BUTTON_TEXTS = ["确定", "确认"];
 const SIGN_DOCUMENT_READY_TEXT = "申请书";
 const SEAL_DOCUMENT_READY_TEXT = "口头协议登记表";
+const HANZI_DATA_URL = "https://cdn.jsdelivr.net/npm/hanzi-writer-data@latest/";
+const PARTY_MEDIAN_CACHE_LIMIT = 50;
+const MEDIAN_NOTICE_CONTAINER_ID = "oral-case-median-notice-container";
+
+const mediatorMedianCache = new Map<string, SignatureMedianEntry>();
+const partyMedianCache = new Map<string, SignatureMedianEntry>();
 
 function getDetailContentRoot(): HTMLElement {
   return (
@@ -187,6 +196,186 @@ function hasVisibleButton(text: string, scope: ParentNode = document): boolean {
   return getVisibleButtons(scope).some((button) =>
     getElementText(button).includes(text.replace(/\s+/g, ""))
   );
+}
+
+function getMedianNoticeContainer(): HTMLElement {
+  let container = document.getElementById(MEDIAN_NOTICE_CONTAINER_ID);
+
+  if (!container) {
+    container = document.createElement("div");
+    container.id = MEDIAN_NOTICE_CONTAINER_ID;
+    Object.assign(container.style, {
+      position: "fixed",
+      top: "24px",
+      right: "24px",
+      zIndex: "2147483647",
+      display: "flex",
+      flexDirection: "column",
+      gap: "10px",
+      pointerEvents: "none",
+      maxWidth: "360px",
+    });
+    document.body.appendChild(container);
+  }
+
+  return container;
+}
+
+function showMedianNotice(
+  message: string,
+  type: "info" | "warning" | "success" = "info",
+  duration = 4000
+): void {
+  const notice = document.createElement("div");
+  const color =
+    type === "warning" ? "#ad6800" : type === "success" ? "#237804" : "#0958d9";
+  const background =
+    type === "warning" ? "#fff7e6" : type === "success" ? "#f6ffed" : "#e6f4ff";
+  const border =
+    type === "warning" ? "#ffd591" : type === "success" ? "#b7eb8f" : "#91caff";
+
+  notice.textContent = message;
+  Object.assign(notice.style, {
+    boxSizing: "border-box",
+    padding: "10px 14px",
+    border: `1px solid ${border}`,
+    borderRadius: "6px",
+    background,
+    color,
+    boxShadow: "0 6px 16px rgba(0, 0, 0, 0.12)",
+    fontSize: "14px",
+    lineHeight: "20px",
+    pointerEvents: "none",
+  });
+
+  getMedianNoticeContainer().appendChild(notice);
+  window.setTimeout(() => {
+    notice.remove();
+  }, duration);
+}
+
+function validateHanziData(char: string, value: unknown): HanziData {
+  const data = value as HanziData;
+
+  if (!Array.isArray(data?.medians) || !data.medians.length) {
+    throw new Error(`“${char}”的数据中没有 medians`);
+  }
+
+  const hasInvalidMedian = data.medians.some((median) => {
+    return (
+      !Array.isArray(median) ||
+      !median.length ||
+      median.some((point) => {
+        return (
+          !Array.isArray(point) ||
+          point.length !== 2 ||
+          !Number.isFinite(point[0]) ||
+          !Number.isFinite(point[1])
+        );
+      })
+    );
+  });
+
+  if (hasInvalidMedian) {
+    throw new Error(`“${char}”的 medians 数据格式异常`);
+  }
+
+  return data;
+}
+
+async function fetchHanziMedian(char: string): Promise<HanziData> {
+  const response = await fetch(`${HANZI_DATA_URL}${encodeURIComponent(char)}.json`);
+
+  if (!response.ok) {
+    throw new Error(`没有找到“${char}”的 Hanzi medians 数据`);
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`“${char}”的 Hanzi medians 数据解析失败`);
+  }
+
+  return validateHanziData(char, data);
+}
+
+function getPartyMedianCache(name: string): SignatureMedianEntry | undefined {
+  const cached = partyMedianCache.get(name);
+  if (!cached) return undefined;
+
+  partyMedianCache.delete(name);
+  partyMedianCache.set(name, cached);
+  return cached;
+}
+
+function setPartyMedianCache(name: string, entry: SignatureMedianEntry): void {
+  partyMedianCache.set(name, entry);
+
+  while (partyMedianCache.size > PARTY_MEDIAN_CACHE_LIMIT) {
+    const oldestKey = partyMedianCache.keys().next().value;
+    if (!oldestKey) break;
+    partyMedianCache.delete(oldestKey);
+  }
+}
+
+async function createSignatureMedianEntry(
+  name: string
+): Promise<SignatureMedianEntry> {
+  const chars = [...name.trim()].filter((char) => /\S/.test(char));
+
+  if (!chars.length) {
+    throw new Error("签名姓名为空");
+  }
+
+  const dataByChar: Record<string, HanziData> = {};
+  for (const char of [...new Set(chars)]) {
+    dataByChar[char] = await fetchHanziMedian(char);
+  }
+
+  return { name, chars, dataByChar };
+}
+
+async function getSignatureMedianEntry(
+  name: string,
+  role: "mediator" | "party"
+): Promise<SignatureMedianEntry> {
+  const normalizedName = name.replace(/\s+/g, "").trim();
+
+  if (!normalizedName) {
+    throw new Error("签名姓名为空");
+  }
+
+  if (role === "mediator") {
+    const cached = mediatorMedianCache.get(normalizedName);
+    if (cached) return cached;
+
+    const entry = await createSignatureMedianEntry(normalizedName);
+    mediatorMedianCache.set(normalizedName, entry);
+    return entry;
+  }
+
+  const cached = getPartyMedianCache(normalizedName);
+  if (cached) return cached;
+
+  const entry = await createSignatureMedianEntry(normalizedName);
+  setPartyMedianCache(normalizedName, entry);
+  return entry;
+}
+
+async function prepareSignatureMedians(
+  signatureNames: string[]
+): Promise<SignatureMedianEntry[]> {
+  showMedianNotice("正在获取签字字迹 median", "info", 2500);
+
+  const entries: SignatureMedianEntry[] = [];
+  for (let index = 0; index < signatureNames.length; index += 1) {
+    const role = index === 0 || index === 3 ? "mediator" : "party";
+    entries[index] = await getSignatureMedianEntry(signatureNames[index] || "", role);
+  }
+
+  showMedianNotice("签字字迹 median 获取完成", "success", 2500);
+  return entries;
 }
 
 function getVisibleModalElements(): HTMLElement[] {
@@ -377,21 +566,48 @@ async function openMobileSignPage(
   url: string,
   signatureNames: string[]
 ): Promise<void> {
+  let signatureMode: SignatureMode = ORAL_CASE_CONFIG.signatureMode;
+  let signatureMedians: SignatureMedianEntry[] | undefined;
+
+  if (
+    signatureMode === "auto" &&
+    ORAL_CASE_CONFIG.autoSignatureMode === "hanzi-medians"
+  ) {
+    try {
+      signatureMedians = await prepareSignatureMedians(signatureNames);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      signatureMode = "manual";
+      showMedianNotice(
+        `签字字迹 median 获取失败：${message}，已降级为手动签字`,
+        "warning",
+        8000
+      );
+    }
+  }
+
+  console.log("准备打开移动端签字页", {
+    signatureMode,
+    signatureNames,
+    signatureMedianCount: signatureMedians?.length || 0,
+  });
+
   const response = (await browser.runtime.sendMessage({
     action: "openMobileSignPage",
     data: {
       url,
-      signatureMode: ORAL_CASE_CONFIG.signatureMode,
+      signatureMode,
       autoSignatureMode: ORAL_CASE_CONFIG.autoSignatureMode,
       signatureNames,
-      signatureFonts: ORAL_CASE_CONFIG.signatureFonts,
-      skeletonConfig: ORAL_CASE_CONFIG.skeletonSignature,
+      signatureMedians,
     },
   } satisfies RequestAction<OpenMobileSignPagePayload>)) as ResponseResult;
 
   if (!response?.success) {
     throw new Error(response?.errorMessage || "移动端签字失败");
   }
+
+  console.log("移动端签字流程完成", { signatureMode });
 }
 
 async function closeQrCodeModal(modal: HTMLElement): Promise<void> {
